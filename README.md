@@ -1,4 +1,4 @@
-# Intraday Breakout-Vorhersage | NASDAQ-100 (5-Minuten-Bars)
+# Intraday Breakout-Vorhersage | NASDAQ-100 
 ### Milestone 1: Problemdefinition & Datenbeschaffung
 
 ## Problemdefinition
@@ -7,7 +7,7 @@
 
 Aktienpreise schwanken ständig über den Handelstag. Manchmal steigt eine Aktie innerhalb kurzer Zeit deutlich an, auch Breakout genannt. Unser Ziel ist es, für jeden Moment des Handelstages vorherzusagen, ob eine Aktie in den nächsten 30 Minuten einen solchen Preisanstieg erleben wird.
 
-Hierbei handelt es sich also um ein binäres Klassifikationsproblem: Für jede 5-Minuten-Bar und jede Aktie im NASDAQ-100-Index beantwortet unser Modell eine einzige Frage:
+Hierbei handelt es sich also um ein binäres Klassifikationsproblem: Für jede 1-Minuten-Bar und jede Aktie im NASDAQ-100-Index beantwortet unser Modell eine einzige Frage:
 
 > Wird der Preis dieser Aktie in den nächsten 30 Minuten um mindestens X% steigen? Ja (1) oder Nein (0)?
 
@@ -17,8 +17,8 @@ Dieses Signal ist direkt umsetzbar: Bei einer Vorhersage von "Ja" betrachten wir
 
 Für jede 5-Minuten-Bar zum Zeitpunkt `t` und jede NASDAQ-100-Aktie definieren wir das Target folgendermaßen:
 
-1. Betrachtung der nächsten 6 Bars (= 30 Minuten, da jede Bar 5 Minuten umfasst).
-2. Ermittlung des höchsten erreichten Preises in diesen 6 Bars: `High_max`.
+1. Betrachtung der nächsten 30 Bars (= 30 Minuten).
+2. Ermittlung des höchsten erreichten Preises in diesen 30 Bars: `High_max`.
 3. Vergleich dieses Maximums mit dem aktuellen Schlusskurs `Close_t`.
 4. Berechnung des potenziellen Gewinns: `(High_max - Close_t) / Close_t`
 5. Wenn dieser Wert >= Schwellenwert `theta` (z.B. 0.3% bis 0.5%), wird diese Bar als 1 (Breakout) gelabelt. Andernfalls als 0 (Kein Breakout).
@@ -36,22 +36,13 @@ Der Schwellenwert `theta` ist ein Parameter, den wir später anhand der Validier
 
 Der NASDAQ-100-Index enthält rund 100 der größten nicht-finanziellen Unternehmen an der NASDAQ-Börse, darunter bekannte Namen wie Apple, Microsoft, NVIDIA, Google und Tesla. Diese Aktien werden sehr aktiv gehandelt (hohe Liquidität), dadurch kriegen wir qualitativ hochwertige Daten.
 
-### Warum 5-Minuten-Bars?
-
-Eine Bar fasst alle Preisaktivitäten innerhalb eines festen Zeitfensters zusammen. Jede Bar speichert vier Preise (Open, High, Low, Close) sowie das gehandelte Volumen.
-
-Wir verwenden 5-Minuten-Bars, weil:
-- 1-Minuten-Bars sehr viel Rauschen enthalten, das kaum lernbar ist.
-- 5-Minuten-Bars kurzfristige Schwankungen glätten und trotzdem Intraday-Dynamiken zeigen.
-- Der Datensatz 5x kleiner ist, was Verarbeitung, Training und Experimente deutlich beschleunigt.
-- 30 Minuten genau 6 Bars entsprechen – das macht die Target-Definition sauber und leicht erklärbar.
 
 ### Geplante Eingabe-Features (Überblick, Details später)
 
 Wir planen folgende Signale aus den Rohdaten abzuleiten:
 
 - **Normalisierter Preis und Volumen**: Z-skalierter VWAP (volumengewichteter Durchschnittspreis) und gehandeltes Volumen.
-- **Exponentielle gleitende Durchschnitte (EMAs)**: Geglättete Preisdurchschnitte über verschiedene Zeitfenster (z.B. 3, 6, 12, 24 Bars = 15 Min, 30 Min, 1 Std, 2 Std).
+- **Exponentielle gleitende Durchschnitte (EMAs)**: Geglättete Preisdurchschnitte über verschiedene Zeitfenster (z.B. 15, 30, 60, 120 Bars = 15 Min, 30 Min, 1 Std, 2 Std).
 - **Steigungen und Beschleunigungen**: Wie schnell der EMA gerade ansteigt oder fällt und ob diese Geschwindigkeit zunimmt oder abnimmt.
 - **Volumen-Spikes**: Ob die aktuelle Bar ein ungewöhnlich hohes Handelsvolumen im Vergleich zum jüngsten Verlauf zeigt.
 - **Intraday-Preisposition**: Wo der aktuelle Preis relativ zum bisherigen Tageshoch und Tagestief liegt.
@@ -60,11 +51,11 @@ Dadurch erhoffen wir Muster zu identifizieren wie etwa EMA-Kreuzungen in Kombina
 
 ## Datenbeschaffung
 
-Wir sammeln historische 1-Minuten-Bars für alle NASDAQ-100-Aktien und speichern eine Datei pro Aktie. In einem späteren Schritt (Milestone 2) werden diese 1-Minuten-Kerzen auf 5-Minuten-Kerzen aggregiert, bevor das Feature Engineering beginnt.
+Wir sammeln historische 1-Minuten-Bars für alle NASDAQ-100-Aktien und speichern eine Datei pro Aktie. 
 
 ### Datenquelle und API
 
-Wir verwenden die **Alpaca Market Data API** (hier noch unsicher, vielleicht von wo anders lieber), um historische Aktiendaten herunterzuladen.
+Wir verwenden die **Alpaca Market Data API**, um historische Aktiendaten herunterzuladen.
 
 Die API liefert:
 
