@@ -3,9 +3,9 @@ Step 1: Data Acquisition
 ----------------------------------
 - Liest API-Keys aus conf/keys.yaml
 - Liest Konfiguration aus conf/params.yaml
-- Laedt NASDAQ-100 Symbole aus data/nasdaq100_symbols.csv
-- Fuer jedes Symbol: holt 1-Minuten-Bars von Alpaca API
-- Filtert auf regulaere Handelszeiten (9:30 - 16:00 ET)
+- Lädt NASDAQ-100 Symbole aus data/nasdaq100_symbols.csv
+- Für jedes Symbol: holt 1-Minuten-Bars von Alpaca API
+- Filtert auf reguläre Handelszeiten mit Alpaca Handelskalender
 - Speichert Daten als Parquet-Datei pro Symbol
 """
 
@@ -13,8 +13,11 @@ import os
 import yaml
 import pandas as pd
 from datetime import datetime
+import pytz
 from zoneinfo import ZoneInfo
 
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetCalendarRequest
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -27,12 +30,12 @@ with open("conf/keys.yaml", "r") as f:
 with open("conf/params.yaml", "r") as f:
     params = yaml.safe_load(f)
 
-API_KEY    = keys["ALPACA"]["API_KEY"]
+API_KEY = keys["ALPACA"]["API_KEY"]
 SECRET_KEY = keys["ALPACA"]["SECRET_KEY"]
 
-DATA_PATH    = params["DATA_ACQUISITION"]["DATA_PATH"]
-START_DATE   = params["DATA_ACQUISITION"]["START_DATE"]
-END_DATE     = params["DATA_ACQUISITION"]["END_DATE"]
+DATA_PATH = params["DATA_ACQUISITION"]["DATA_PATH"]
+START_DATE = params["DATA_ACQUISITION"]["START_DATE"]
+END_DATE = params["DATA_ACQUISITION"]["END_DATE"]
 SYMBOLS_PATH = params["DATA_ACQUISITION"]["SYMBOLS_PATH"]
 
 # Zielordner erstellen falls nicht vorhanden
@@ -44,24 +47,48 @@ os.makedirs(OUTPUT_PATH, exist_ok=True)
 symbols_df = pd.read_csv(SYMBOLS_PATH)
 symbols = symbols_df["Symbol"].tolist()
 
-# Fuer erste Tests nur 5 Symbole verwenden
+# Für erste Tests nur 5 Symbole verwenden
 # Wenn Pipeline funktioniert, diese Zeile auskommentieren
-symbols = symbols[:5]
+# symbols = symbols[:5]
 print(f"Symbole geladen: {symbols}")
 
-# ─── Alpaca Client erstellen ───────────────────────────────────────────────────
+# ─── Alpaca Client erstellen + Kalender laden ──────────────────────────────────
 
 client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+trading_client = TradingClient(API_KEY, SECRET_KEY)
 
-# Handelszeiten (Eastern Time)
-ET = ZoneInfo("America/New_York")
-MARKET_OPEN  = 9 * 60 + 30   # 9:30 in Minuten
-MARKET_CLOSE = 16 * 60        # 16:00 in Minuten
+print("Lade Handelskalender...")
+cal_request = GetCalendarRequest(
+    start=datetime.strptime(START_DATE, "%Y-%m-%d").date(),
+    end=datetime.strptime(END_DATE, "%Y-%m-%d").date()
+)
+calendar = trading_client.get_calendar(cal_request)
 
-# ─── Daten fuer jedes Symbol herunterladen ─────────────────────────────────────
+# Lookup Tabelle für Öffnungszeiten bauen
+eastern = pytz.timezone("US/Eastern")
+cal_map = {}
+for c in calendar:
+    # Setze explizit die Zeitzone auf US/Eastern
+    open_dt = eastern.localize(c.open) if not c.open.tzinfo else c.open.astimezone(eastern)
+    close_dt = eastern.localize(c.close) if not c.close.tzinfo else c.close.astimezone(eastern)
+    cal_map[c.date] = (open_dt, close_dt)
+
+
+def is_market_open(ts):
+    # Wandelt den Zeitstempel in Eastern Time um
+    ts_eastern = ts.tz_convert(eastern) if ts.tzinfo else ts.tz_localize("UTC").astimezone(eastern)
+    d = ts_eastern.date()
+    # Ist der Tag im Kalender vermerkt?
+    if d not in cal_map:
+        return False
+    # Ist die konkrete Minute innerhalb der echten Öffnungszeit des jeweiligen Tages?
+    return cal_map[d][0] <= ts_eastern < cal_map[d][1]
+
+
+# ─── Daten für jedes Symbol herunterladen ─────────────────────────────────────
 
 for symbol in symbols:
-    print(f"\nLade Daten fuer {symbol} ...")
+    print(f"\nLade Daten für {symbol} ...")
 
     try:
         # API-Anfrage definieren
@@ -70,24 +97,24 @@ for symbol in symbols:
             timeframe=TimeFrame.Minute,
             start=datetime.strptime(START_DATE, "%Y-%m-%d"),
             end=datetime.strptime(END_DATE, "%Y-%m-%d"),
-            adjustment="all",   # Bereinigt um Splits und Dividenden
-            feed="iex"          # Kostenloser Feed (IEX Exchange)
+            adjustment="all",  # Bereinigt um Splits und Dividenden
+            feed="iex"  # Kostenloser Feed (IEX Exchange)
         )
 
         # Daten abrufen
         bars = client.get_stock_bars(request)
         df = bars.df
 
-        # Multi-Index aufloesen falls vorhanden (symbol, timestamp) -> timestamp
+        # Multi-Index auflösen falls vorhanden (symbol, timestamp) -> timestamp
         if isinstance(df.index, pd.MultiIndex):
             df = df.reset_index(level=0, drop=True)
 
-        # Timestamp in Eastern Time konvertieren
-        df.index = df.index.tz_convert(ET)
+        # Index explizit als Eastern Time definieren (zur Sicherheit für die Parquet Speicherung)
+        df.index = df.index.tz_convert(eastern) if df.index.tzinfo else df.index.tz_localize("UTC").tz_convert(eastern)
 
-        # Nur regulaere Handelszeiten behalten (9:30 - 16:00 ET)
-        minutes = df.index.hour * 60 + df.index.minute
-        df = df[(minutes >= MARKET_OPEN) & (minutes < MARKET_CLOSE)]
+        # Nur reguläre Handelszeiten behalten mithilfe der Kalenderfunktion (ersetzt alte Minutengrenzen)
+        df["is_open"] = df.index.map(is_market_open)
+        df = df[df["is_open"]].drop(columns=["is_open"])
 
         # Als Parquet speichern
         output_file = os.path.join(OUTPUT_PATH, f"{symbol}.parquet")
