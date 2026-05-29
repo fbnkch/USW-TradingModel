@@ -1,0 +1,18 @@
+# API Keys – niemals ins Git!
+conf/keys.yaml
+
+# Rohdaten (zu gross fuer Git)
+data/raw/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+
+# Artifacts
+artifacts/

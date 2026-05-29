@@ -1,0 +1,6 @@
+DATA_ACQUISITION:
+  DATA_PATH: "data/raw"
+  START_DATE: "2022-01-01"
+  END_DATE: "2025-01-01"
+  SYMBOLS_PATH: "data/nasdaq100_symbols.csv"
+  TIMEFRAME: "1Min"
