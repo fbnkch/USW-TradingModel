@@ -10,6 +10,7 @@ from plots_intraday import plot_intraday_close
 from plots_distributions import plot_return_and_volume_distributions
 from plots_intraday_patterns import plot_intraday_patterns
 from plots_correlations import plot_returns_correlation
+from plots_breakout_domain import plot_breakout_by_time_of_day, plot_breakout_duration
 
 # "Main" Datei (bei ausführen werden plots erzeugt)
 def descriptive_statistics(symbols):
@@ -65,6 +66,10 @@ def run_all():
 
     # 7) Korrelationen
     plot_returns_correlation(["AAPL", "MSFT", "NVDA", "AMZN", "META"])
+
+    # 8) Breakout-Domain (benoetigt pre_split Daten aus Step 3)
+    plot_breakout_by_time_of_day("AAPL")
+    plot_breakout_duration("AAPL")
 
 
 if __name__ == "__main__":
