@@ -1,0 +1,9 @@
+alpaca-py
+pandas
+pyarrow
+pyyaml
+matplotlib
+seaborn
+numpy
+scikit-learn
+joblib
