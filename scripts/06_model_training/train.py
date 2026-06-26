@@ -10,6 +10,7 @@ from model import BreakoutModel
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 params = yaml.safe_load(open(PROJECT_ROOT / "conf" / "params.yaml"))
 processed_path = PROJECT_ROOT / params["DATA_PREP"]["PROCESSED_PATH"]
+N_SHARDS = params["SPLIT_DATA"]["N_SHARDS"]
 
 SYMBOLS   = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
 EPOCHS    = 10
@@ -19,8 +20,9 @@ THRESHOLD = 0.5  # ab wann gilt Vorhersage als Breakout
 features = open(processed_path / "features.txt").read().splitlines()
 
 # Daten laden und zusammenführen
-train_df = pd.concat([pd.read_parquet(processed_path / f"{s}_train.parquet") for s in SYMBOLS])
-val_df   = pd.concat([pd.read_parquet(processed_path / f"{s}_validation.parquet") for s in SYMBOLS])
+shuffled_path = PROJECT_ROOT / params["SPLIT_DATA"]["SHUFFLED_PATH"]
+train_df = pd.concat([pd.read_parquet(shuffled_path / f"train_shard_{k}.parquet") for k in range(N_SHARDS)])
+val_df   = pd.concat([pd.read_parquet(shuffled_path / f"validation_shard_{k}.parquet") for k in range(N_SHARDS)])
 
 X_train = torch.tensor(train_df[features].values, dtype=torch.float32)
 y_train = torch.tensor(train_df["breakout_30m"].values, dtype=torch.float32)
