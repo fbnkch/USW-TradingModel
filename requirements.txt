@@ -4,3 +4,7 @@ pyarrow
 pyyaml
 matplotlib
 seaborn
+numpy
+scikit-learn
+joblib
+torch

@@ -20,3 +20,18 @@ DATA_PREP:
   TRAIN_DATE:      "2023-12-31"
   VALIDATION_DATE: "2024-06-30"
   TEST_DATE:       "2025-01-01"
+
+
+
+# Step 04 - Split Data (Shuffle + Global Sharding)
+SPLIT_DATA:
+  N_SHARDS: 100
+  SHUFFLED_PATH: "data/processed/shuffled/"
+
+# Step 05 - Post-Split Data Preparation
+POST_SPLIT:
+  SCALER_PATH: "data/processed/global_scaler.pkl"
+  BALANCE_PATH: "data/processed/class_balance.json"
+
+# Test-Modus: nur erste N Symbole verarbeiten (null = alle)
+SUBSET_SYMBOLS: null
