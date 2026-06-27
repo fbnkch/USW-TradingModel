@@ -8,3 +8,7 @@ numpy
 scikit-learn
 joblib
 torch
+lightgbm
+xgboost
+# Für GPU-Support (RTX 3090):
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124

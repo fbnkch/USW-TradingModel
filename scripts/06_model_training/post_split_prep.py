@@ -1,3 +1,10 @@
+# DEPRECATED: use 05_post_split_prep/global_scaler.py instead.
+# This script fits a scaler on only 5 symbols (hardcoded).
+# 05_post_split_prep/global_scaler.py uses partial_fit on ALL 100 training shards
+# and is the canonical scaler for the pipeline.
+#
+# Kept for reference / backward compatibility during development.
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
