@@ -1,0 +1,9 @@
+{
+  "total_samples": 10394874,
+  "positive_samples": 5174607,
+  "negative_samples": 5220267,
+  "positive_ratio": 0.497804,
+  "scale_pos_weight": 1.0088,
+  "class_weight_0": 0.9956,
+  "class_weight_1": 1.0044
+}
