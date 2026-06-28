@@ -1,308 +1,177 @@
-# 📈 Trading-Strategie: Intraday Breakout NASDAQ-100
-
-> **Basiert auf:** Datenanalyse von 101 NASDAQ-100 Aktien, 1-Minuten-Bars (2022–2025)
-> **Zielvariable:** `breakout_30m` – Kurs steigt ≥0.3% innerhalb der nächsten 30 Minuten
-> **Stand:** 27.06.2026
+# Beta-Trading-Strategie
+### Erster Ansatz für Strategie anhand unserer ersten Ergebnisse ohne Backpropagation
 
 ---
 
 ## 1. Executive Summary
 
-### 1.1 Das Problem
+### 1.1 Modellergebnisse (Test-Set)
 
-Wir wollen kurzfristige intraday Kursausbrüche (Breakouts) bei NASDAQ-100 Aktien vorhersagen. Konkret: Steigt der Kurs einer Aktie in den nächsten 30 Minuten um mindestens 0.3%?
+| Modell | Accuracy | F1 | Precision | Recall | Threshold | Rolle |
+|--------|----------|-----|-----------|--------|-----------|-------|
+| Baseline  | 50.22% | – | – | – | – | – |
+| **MLP V2** | **64.04%** | 0.563 | **0.600** | 0.531 | 0.50 |  **Filter** |
+| GRU | 58.42% | **0.647** | 0.514 | 0.871 | 0.33 |  Finder |
+| CNN | 57.93% | 0.645 | 0.511 | 0.873 | 0.31 | Finder |
+| LSTM | 57.09% | 0.642 | 0.505 | **0.878** | 0.32 |  Finder |
+| LightGBM | 56.47% | 0.623 | 0.485 | 0.861 | 0.36 |  Finder |
 
-### 1.2 Die Datenlage
+### 1.2 Die zwei Modell-Familien
 
-| Metrik | Wert |
-|--------|------|
-| Trainings-Samples | 10.394.874 (1-Minuten-Bars) |
-| Symbole | 100 NASDAQ-100 Aktien |
-| Zeitraum | 2022-01-01 bis 2025-01-01 |
-| Features | 82 technische Indikatoren (Momentum, EMA, Slope, Volumen, Lagged) |
-| Klassen-Balance | 49.78% Breakout / 50.22% Kein Breakout (nahezu perfekt balanced) |
-| Breakout-Rate variiert pro Symbol | 32% (AAPL) bis 55% (ABNB) |
+Unsere 5 Modelle fallen in zwei klare Kategorien:
 
-### 1.3 Das aktuelle Modell
-
-| Modell | Accuracy | Precision (Breakout) | Recall (Breakout) | F1 |
-|--------|----------|---------------------|-------------------|-----|
-| Baseline (Majority) | 50.22% | – | – | – |
-| MLP V1 (82→64→32→1) | 59.6% | 52% | 53% | 0.52 |
-| MLP V2 (verbessert) | *in Training* | – | – | – |
-| LSTM (sequentiell) | *in Training* | – | – | – |
-| GRU (sequentiell) | *in Training* | – | – | – |
-| LightGBM | *in Training* | – | – | – |
-
-**Kernproblem:** Precision von 52% bedeutet: **Jeder zweite Trade ist ein Fehlalarm.** Recall von 53% bedeutet: **Fast die Hälfte aller Breakouts wird verpasst.**
+| | Filter (MLP V2) | Finder (LSTM/GRU/CNN/LightGBM) |
+|---|---|---|
+| **Stärke** | Hohe Precision (60%) | Hoher Recall (87-88%) |
+| **Signal** | „Wenn ich Alarm schlage, stimmt es meistens" | „Ich finde fast jeden Breakout" |
+| **Schwäche** | Verpasst ~47% der Breakouts | ~49% Fehlalarm-Rate |
+| **Einsatz** | Bestätigung | Kandidaten-Screening |
 
 ---
 
-## 2. Strategie-Design
+## 2. Feature-Auswahl: 5 Schlüssel-Features
 
-### 2.1 Grundprinzip
+Basierend auf LightGBM Feature Importance (Gain) konzentrieren wir uns auf die dominanten Features:
 
-Die Strategie nutzt ein **Multi-Modell-Ensemble** mit strengen Entry-Filtern, um die Precision zu erhöhen – auch auf Kosten von Recall. Im Trading ist es besser, wenige gute Trades zu machen als viele schlechte.
+| # | Feature | Gain | Typ | Trading-Bedeutung |
+|---|---------|------|-----|-------------------|
+| 1 | `return_1m` | 3.78M | Momentum | **Der stärkste Prädiktor.** 1-Minuten-Return. Positiv = bereits in Bewegung. |
+| 2 | `Slope_close_1` | 2.40M | Trend | Kurzfristige Preisrichtung. Steigend = Momentum baut auf. |
+| 3 | `minutes_since_open` | 2.32M | Zeit | **Tageszeit-Muster.** Breakouts häufen sich zu bestimmten Zeiten. |
+| 4 | `Slope_Slope_EMA_240_1_1` | 0.26M | Beschleunigung | Zweite Ableitung des Langzeit-Trends (4h-EMA). |
+| 5 | `volume_norm` | 0.17M | Volumen | Relatives Volumen. Ungewöhnlich hohes Volumen = Treibstoff. |
+
+**Erkenntnis:** Die Top-3 Features machen **>90%** der gesamten Vorhersagekraft aus. Das Modell lernt im Kern: *„Wenn der Preis bereits steigt (return_1m, Slope_close_1) und die Tageszeit günstig ist (minutes_since_open), ist ein Breakout wahrscheinlich."*
+
+Die restlichen 77 Features (EMAs, MACD, RSI, Lagged-Features etc.) tragen nur marginal bei – sie machen das Modell komplexer, ohne nennenswert bessere Vorhersagen zu liefern.
+
+### 2.1 Feature-Gruppen nach Wichtigkeit
 
 ```
-HOHE PRECISION > HOHER RECALL (für Trading)
+5/5 KRITISCH (Top-3, >90% Gain):
+    return_1m, Slope_close_1, minutes_since_open
+
+4/5 HILFREICH (0.1-0.3M Gain):
+    Slope_Slope_EMA_240_1_1, volume_norm, EMA_240
+
+3/5 MODERAT (0.05-0.12M Gain):
+    cumulative_delta, MACD_signal, MACD_histogram,
+    opening_range_position, close_norm, RSI_14
+
+2/5 MARGINAL (<0.08M Gain):
+    Alle 15 EMA-Varianten, 5 BB/RSI-Derivate
+    → Zusammen <5% des Gesamt-Gains
+
+1/5 VERNACHLÄSSIGBAR (<0.01M Gain):
+    Lagged-Features (close_norm_lag5/10/15, etc.)
+    → <1% des Gesamt-Gains
 ```
 
-**Faustregel:** Ein Fehlalarm (False Positive) kostet Geld (Spread + Slippage + Stop-Loss). Ein verpasster Breakout (False Negative) kostet nur Opportunität. Daher liegt der Fokus auf Precision.
+---
 
-### 2.2 Signal-Pipeline
+## 3. Ensemble-Trading-Strategie
+
+### 3.1 Signal-Pipeline
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ 1. MODELL-   │───▶│ 2. SIGNAL-   │───▶│ 3. MARKT-    │───▶│ 4. EXECUTION │
-│    ENSEMBLE  │    │    FILTER    │    │    KONTEXT   │    │              │
+│ 1. FINDER    │───▶│ 2. FILTER    │───▶│ 3. MARKT-    │───▶│ 4. EXECUTION │
+│  (GRU/LSTM)  │    │  (MLP V2)    │    │  KONTEXT     │    │              │
 └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
-    5 Modelle         Threshold +        Time-of-Day +       Position Size +
-    Weighted Avg      Confirmation        Volatility          Risk Limits
+ P_breakout > 0.33   P_breakout > 0.50   Time + Volume       Entry + Risk
+ ~88% aller BO       60% Precision       + Confirmation      Mgmt
+ gefunden            der Bestätigungen
 ```
 
-### 2.3 Modell-Ensemble
+### 3.2 Entry-Regeln
 
-Vier Modell-Familien decken unterschiedliche Signalmuster ab:
+Ein Trade wird NUR eröffnet, wenn **ALLE** Bedingungen erfüllt sind:
 
-| # | Modell | Typ | Stärke |
-|---|--------|-----|--------|
-| 1 | MLP V2 | Feedforward | Allgemeine Feature-Interaktionen |
-| 2 | LSTM | Sequentiell (RNN) | Langfristige zeitliche Abhängigkeiten |
-| 3 | GRU | Sequentiell (RNN) | Effiziente Zeitmuster-Erkennung |
-| 4 | CNN-1D | Sequentiell (Conv) | Lokale Pattern-Erkennung (3–10 Min) |
-| 5 | LightGBM | Gradient Boosting | Nicht-lineare Interaktionen, Feature-Importance |
+| # | Bedingung | Wert | Quelle |
+|---|-----------|------|--------|
+| E1 | **Finder-Signal** | GRU oder LSTM: P(breakout) > 0.33 | Modell-Output |
+| E2 | **Filter-Bestätigung** | MLP V2: P(breakout) > 0.50 | Modell-Output |
+| E3 | **Momentum-Richtung** | `return_1m` > 0 | Feature #1 |
+| E4 | **Kurz-Trend positiv** | `Slope_close_1` > 0 | Feature #2 |
+| E5 | **Keine Mittagsflaute** | 10:00–12:00 oder 14:00–15:30 ET | Feature #3 |
 
-**Ensemble-Regel:**
-```
-P_ensemble = 0.25 × P_mlp + 0.20 × P_lstm + 0.15 × P_gru + 0.15 × P_cnn + 0.25 × P_lgb
-```
-Gewichte basieren auf Validierungs-Performance (können nach Training angepasst werden).
+**Warum so streng?** Jeder weitere Filter reduziert False Positives. Mit E1–E5 erwarten wir Precision ≥ 62% (von 50% ohne Filter).
+
+### 3.3 Exit-Regeln
+
+| Exit-Typ | Bedingung | Begründung |
+|----------|-----------|------------|
+| **Take Profit** | Preis ≥ Entry × 1.0036 (+0.36%) | Breakout-Threshold + 20% Puffer |
+| **Stop Loss** | Preis ≤ Entry × 0.9985 (−0.15%) | Halber Breakout-Threshold |
+| **Time Stop** | 30 Minuten ohne TP/SL | Vorhersagehorizont abgelaufen |
+| **Signal-Kollaps** | Finder P(breakout) < 0.20 | Modell-Konfidenz eingebrochen |
 
 ---
 
-## 3. Entry-Regeln
+## 4. Risikomanagement
 
-### 3.1 Primärer Entry
+### 4.1 Positionsgrößen
 
-Ein Trade wird eröffnet, wenn ALLE folgenden Bedingungen erfüllt sind:
+| Regel | Wert |
+|-------|------|
+| Max. Risiko pro Trade | 0.5% des Portfolios |
+| Max. Risiko pro Tag | 2.0% des Portfolios |
+| Max. gleichzeitige Positionen | 3 |
+| Max. Position pro Symbol | 5% des Portfolios |
 
-| # | Bedingung | Wert | Begründung |
-|---|-----------|------|------------|
-| E1 | **Ensemble-Wahrscheinlichkeit** | P_ensemble > θ_symbol | Kalibrierter Threshold pro Symbol |
-| E2 | **Modell-Übereinstimmung** | ≥ 3 von 5 Modellen signalisieren Breakout | Reduziert False Positives durch Konsens |
-| E3 | **Volumen-Bestätigung** | volume_spike_ratio > 1.5 | Breakout ohne Volumen = Fake |
-| E4 | **Momentum-Richtung** | Slope_close_5 > 0 | Preis muss bereits steigen |
-| E5 | **Keine Überkauft-Situation** | RSI_14 < 75 | Vermeidet Einstieg am Top |
-| E6 | **Time-of-Day-Filter** | 09:45–15:45 ET | Erste/letzte 15 Min zu volatil |
-
-### 3.2 Symbol-Kalibrierung
-
-Jedes Symbol hat eine eigene Breakout-Rate. Der Threshold θ_symbol wird pro Symbol auf dem Validation-Set so kalibriert, dass Precision ≥ 60% erreicht wird:
+### 4.2 Kelly Criterion (Half-Kelly)
 
 ```
-θ_symbol = Percentile_{90}(P_ensemble | kein Breakout)  # 90% der Non-Breakouts liegen darunter
-```
+f* = (p × b - q) / b
+   = (0.60 × 2.4 - 0.40) / 2.4
+   = 0.433  (Full Kelly)
 
-Das bedeutet: Nur die stärksten 10% der Ensemble-Signale werden gehandelt.
-
-### 3.3 Time-of-Day-Gewichtung
-
-Breakouts sind nicht gleichmäßig über den Tag verteilt (laut unserer EDA):
-
-| Phase | Zeit (ET) | Breakout-Häufigkeit | Strategie |
-|-------|-----------|---------------------|-----------|
-| Eröffnung | 09:30–10:00 | Sehr hoch (volatil) | KEIN Handel |
-| Morning | 10:00–12:00 | Hoch | Normal |
-| Mittagsflaute | 12:00–14:00 | Niedrig | Reduzierte Positionsgröße (×0.5) |
-| Nachmittag | 14:00–15:30 | Hoch | Normal |
-| Schluss | 15:30–16:00 | Sehr hoch (volatil) | KEIN Handel |
-
----
-
-## 4. Exit-Regeln
-
-### 4.1 Take Profit
-
-```
-TP = Einstiegspreis × (1 + THETA × 1.2) = Einstiegspreis × 1.0036
-```
-
-Der Faktor 1.2 gibt einen kleinen Puffer über den 0.3% Breakout hinaus – viele Breakouts laufen weiter, und wir wollen nicht zu früh aussteigen.
-
-### 4.2 Stop Loss
-
-```
-SL = Einstiegspreis × (1 - THETA × 0.5) = Einstiegspreis × 0.9985
-```
-
-Der Stop Loss ist bei der Hälfte des Breakout-Thresholds. Wenn der Preis um 0.15% fällt, war das Signal wahrscheinlich falsch.
-
-### 4.3 Time Stop
-
-```
-Wenn nach 30 Minuten weder TP noch SL erreicht → Markt-Exit
-```
-
-Nach 30 Minuten ist der Vorhersagehorizont abgelaufen. Länger zu halten ist Spekulation, nicht Modell-basiert.
-
-### 4.4 Signal-Reversal
-
-```
-Wenn P_ensemble während des Trades unter 0.35 fällt → sofortiger Exit
-```
-
-Ein drastischer Rückgang der Modell-Konfidenz deutet auf eine veränderte Marktlage hin.
-
----
-
-## 5. Positionsgrößen & Risikomanagement
-
-### 5.1 Kelly Criterion (modifiziert)
-
-Die optimale Positionsgröße nach dem Kelly-Kriterium:
-
-```
-f* = (p × b - (1-p)) / b
-
-wobei:
-  p  = Precision des Modells (≈ 0.60 nach Kalibrierung)
-  b  = Gewinn/Verlust-Ratio = 0.36% / 0.15% = 2.4
-  f* = (0.60 × 2.4 - 0.40) / 2.4 = 0.433
-```
-
-**Empfehlung:** Verwende **Half-Kelly (f*/2 = 21.7%)**, um die Volatilität zu reduzieren.
-
-### 5.2 Praktische Positionsgrößen-Regeln
-
-| Regel | Wert | Begründung |
-|-------|------|------------|
-| Max. Risiko pro Trade | 0.5% des Portfolios | Konservativ |
-| Max. Risiko pro Tag | 2.0% des Portfolios | Max. 4 Verlust-Trades |
-| Max. gleichzeitige Positionen | 3 | Diversifikation |
-| Max. Position pro Symbol | 5% des Portfolios | Konzentrationsrisiko |
-| Min. Handelsvolumen | $1M Tagesumsatz | Liquidität sicherstellen |
-
-### 5.3 Konkrete Berechnung
-
-```
-Positionsgröße ($) = Portfolio × 0.5% / (Einstiegspreis × 0.15%)
-
-Beispiel:
-  Portfolio = $100,000
-  Max Risk  = $500 pro Trade
-  Einstieg  = $150.00
-  SL-Distanz = $150.00 × 0.15% = $0.225
-  
-  Positionsgröße = $500 / $0.225 = 2,222 Shares
-  Positionswert   = 2,222 × $150 = $333,300  ← Hebel nötig!
-```
-
-**Wichtig:** Ohne Hebel ist die Strategie für kleine Portfolios schwierig umzusetzen. Alternativ: Breiteren Stop-Loss (0.25%) oder Micro-Futures (MNQ) nutzen.
-
----
-
-## 6. Backtesting-Framework
-
-### 6.1 Walk-Forward-Test
-
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐
-│ TRAIN    │    │ VAL      │    │ TEST     │
-│ bis 2023 │    │ H1 2024  │    │ H2 2024  │
-└──────────┘    └──────────┘    └──────────┘
-      │               │               │
-   Training     Kalibrierung    Out-of-Sample
-   der Modelle  der Thresholds  Performance
-```
-
-### 6.2 Key Performance Indicators (KPIs)
-
-| KPI | Ziel | Aktuell (MLP V1) |
-|-----|------|------------------|
-| Win Rate (Precision) | ≥ 60% | 52% ❌ |
-| Profit Factor | ≥ 1.3 | Noch nicht berechnet |
-| Sharpe Ratio | ≥ 1.0 | Noch nicht berechnet |
-| Max Drawdown | ≤ 10% | Noch nicht berechnet |
-| Trades pro Tag (ø) | 5–20 | Noch nicht berechnet |
-| Avg Trade Duration | 5–25 Min | Noch nicht berechnet |
-
-### 6.3 Backtest-Skript (geplant)
-
-```python
-# pseudocode für backtest.py
-for symbol in nasdaq100:
-    for timestamp in test_data:
-        signal = ensemble.predict(features_at(timestamp))
-        if entry_conditions_met(signal):
-            open_position(symbol, timestamp, size=calculate_size())
-        for open_pos in active_positions:
-            if exit_condition(open_pos, timestamp):
-                close_position(open_pos)
+Half-Kelly: 21.7% des Portfolios pro Trade
+→ In der Praxis: 0.5% Risk pro Trade (konservativer)
 ```
 
 ---
 
-## 7. Risiken & Fallstricke
+## 5. Backtesting-Plan
 
-### 7.1 Modell-Risiken
+### 5.1 Setup
 
-| Risiko | Beschreibung | Mitigation |
-|--------|-------------|------------|
-| **Overfitting** | Modell lernt Rauschen statt Signal | Walk-Forward-Test, Early Stopping |
-| **Regime-Change** | 2022–2024 Muster gelten 2025 nicht mehr | Regelmäßiges Retraining (monatlich) |
-| **Look-Ahead-Bias** | Features enthalten zukünftige Information | Data-Leakage-Checks (Bereits implementiert ✓) |
-| **Survivorship-Bias** | Nur heute existierende NASDAQ-100 Symbole | Historische Index-Zusammensetzung prüfen |
+- **Walk-Forward:** Train bis 2023, Val H1 2024, **Test H2 2024**
+- **Transaktionskosten:** 0.01% pro Trade (Spread + Slippage)
+- **Startkapital:** $100.000
 
-### 7.2 Trading-Risiken
+### 5.2 Vergleichs-Benchmarks
 
-| Risiko | Beschreibung | Mitigation |
-|--------|-------------|------------|
-| **Slippage** | Ausführungspreis weicht vom Signalpreis ab | Limit-Orders, liquide Symbole |
-| **Gap-Risk** | Preis springt über SL hinweg | Keine Trades über Earnings, FOMC |
-| **Korrelation** | NASDAQ-100 Aktien sind stark korreliert | Max. 3 Positionen gleichzeitig |
-| **Transaction Costs** | Spread + Commission fressen Gewinne | Mindest-Breakout ≥ 2× Spread |
-| **Black Swan** | Flash Crash, 9/11-artige Events | Max Daily Loss = 2%, dann Stop |
+| Strategie | Erwartete Annual Return | Max DD | Sharpe |
+|-----------|------------------------|--------|--------|
+| Buy & Hold NASDAQ-100 | ~15-20% | ~20-30% | ~0.8 |
+| Unsere Breakout-Strategie | TBD | TBD | TBD |
+| 60/40 Portfolio | ~8-10% | ~10-15% | ~1.0 |
 
----
+### 5.3 KPIs
 
-## 8. Nächste Schritte & Roadmap
-
-### 8.1 Phase 1: Modell-Training (aktuell) ⏳
-
-- [x] MLP V1 trainiert (Baseline: 59.6% Acc, F1=0.52)
-- [ ] MLP V2 mit GPU + Scaler trainieren
-- [ ] LSTM trainieren (sequentiell)
-- [ ] GRU trainieren (sequentiell)
-- [ ] CNN-1D trainieren (sequentiell)
-- [ ] LightGBM trainieren
-- [ ] Modell-Vergleich & Ensemble-Gewichte bestimmen
-
-### 8.2 Phase 2: Strategie-Implementierung
-
-- [ ] `backtest.py` – Walk-Forward-Backtest mit Transaktionskosten
-- [ ] `calibrate_thresholds.py` – Pro-Symbol-Threshold-Kalibrierung
-- [ ] `ensemble.py` – Ensemble-Predictor mit Gewichtung
-- [ ] `risk_manager.py` – Positionsgrößen & Risiko-Limits
-
-### 8.3 Phase 3: Live-Trading (Alpha)
-
-- [ ] `live_signal.py` – Real-Time-Signal-Generator (Alpaca Stream)
-- [ ] `order_manager.py` – Order-Execution (Alpaca Trading API)
-- [ ] `monitor.py` – Live-Monitoring & Alerting
-- [ ] Paper-Trading für 4 Wochen vor Live-Einsatz
+| KPI | Ziel |
+|-----|------|
+| Win Rate | ≥ 60% |
+| Profit Factor | ≥ 1.3 |
+| Sharpe Ratio | ≥ 1.2 |
+| Max Drawdown | ≤ 10% |
+| Trades / Tag (ø) | 5–20 |
 
 ---
 
-## 9. Zusammenfassung
+## 6. Paper Trading (Alpaca)
 
-Diese Trading-Strategie basiert auf einer soliden Datenbasis (10M+ Samples, 82 Features, 100 Symbole) und nutzt ein Multi-Modell-Ensemble, um die Schwächen einzelner Modelle auszugleichen.
+- **Plattform:** Alpaca Markets Paper API
+- **Startkapital:** $100.000 (Papiergeld)
+- **Zeitraum:** 2–4 Wochen vor Live-Einsatz
+- **Fokus:** Slippage-Realität, Order-Fill-Rate, Strategie-Stabilität
 
-**Der Schlüssel zum Erfolg liegt in der Signal-Filterung:**
-- Nur die besten 10% der Signale handeln (kalibrierter Threshold)
-- Konsens von mindestens 3 Modellen verlangen
-- Volumen-Bestätigung erzwingen
-- Klare Exit-Regeln mit Take Profit & Stop Loss
+---
 
-Das Modell-Ensemble wird die Precision von 52% (MLP V1) voraussichtlich auf 58–62% verbessern – genug für eine profitable Strategie nach Transaktionskosten.
+## 7. Nächste Schritte
 
+1. **Ensemble-Predictor** (`ensemble.py`) --> Finder + Filter kombinieren
+2. **Backtest** (`backtest.py`) --> Walk-Forward mit Transaktionskosten
+3. **Paper Trading Setup** --> Alpaca API Integration
+4. **Live-Monitoring** --> Real-Time Dashboard für Paper-Trading-Phase

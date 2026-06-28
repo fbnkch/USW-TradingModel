@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>USW TradingModel — Final Results</title>
+<style>
+  :root {
+    --bg: #0a0e17; --card: #111827; --border: #1e293b;
+    --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b;
+    --blue: #3b82f6; --green: #10b981; --red: #ef4444;
+    --amber: #f59e0b; --purple: #8b5cf6;
+    --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
+
+  /* Header */
+  .hdr { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; margin-bottom: 28px; }
+  .hdr h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+  .hdr .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .tags span { background: var(--border); color: var(--muted); font-size: 11px; padding: 4px 10px; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; }
+
+  /* Charts */
+  .section-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; font-weight: 600; margin: 28px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .chart-row { display: grid; gap: 16px; margin-bottom: 16px; }
+  .chart-row.c2 { grid-template-columns: 1fr 1fr; }
+  .chart-row.c1 { grid-template-columns: 1fr; }
+  .chart-img { width: 100%; border-radius: 6px; border: 1px solid var(--border); background: var(--card); display: block; }
+
+  /* KPI cards */
+  .kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px 16px; text-align: center; }
+  .kpi .val { font-size: 34px; font-weight: 700; letter-spacing: -1px; }
+  .kpi .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 4px; }
+  .kpi .note { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
+  /* Table */
+  .tbl-wrap { overflow-x: auto; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--dim); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap; background: var(--card); }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); white-space: nowrap; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .hi { color: var(--green); font-weight: 700; }
+  .hi-b { color: var(--blue); font-weight: 700; }
+  .hi-a { color: var(--amber); font-weight: 700; }
+  .tg { font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 600; letter-spacing: 0.4px; }
+  .tg-f { background: rgba(245,158,11,0.15); color: var(--amber); }
+  .tg-fl { background: rgba(59,130,246,0.15); color: var(--blue); }
+
+  .ftr { text-align: center; padding: 24px; color: var(--dim); font-size: 11px; border-top: 1px solid var(--border); margin-top: 20px; }
+
+  @media (max-width: 1000px) { .kpi-row { grid-template-columns: repeat(3, 1fr); } .chart-row.c2 { grid-template-columns: 1fr; } }
+  @media (max-width: 600px) { .kpi-row { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- Header -->
+<div class="hdr">
+  <div>
+    <h1>USW TradingModel — Final Results</h1>
+    <div class="sub">Intraday Breakout Prediction · 100 NASDAQ-100 Stocks · 1-Min Bars · 30-Min Horizon · 10.4M Training Samples</div>
+    <div class="tags">
+      <span>82 Features</span><span>5 Models</span><span>RTX 3090 24GB</span><span>PyTorch 2.6</span><span>LightGBM 4.6</span>
+    </div>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-row">
+  <div class="kpi"><div class="val" style="color:var(--blue)">64.04%</div><div class="lbl">Best Accuracy</div><div class="note">MLP V2 · +13.8 PP</div></div>
+  <div class="kpi"><div class="val" style="color:var(--green)">0.647</div><div class="lbl">Best F1-Score</div><div class="note">GRU · Breakout Class</div></div>
+  <div class="kpi"><div class="val" style="color:var(--amber)">87.8%</div><div class="lbl">Highest Recall</div><div class="note">LSTM · 9/10 breakouts found</div></div>
+  <div class="kpi"><div class="val" style="color:#06b6d4">60.0%</div><div class="lbl">Highest Precision</div><div class="note">MLP V2 · 6/10 signals correct</div></div>
+  <div class="kpi"><div class="val" style="color:var(--purple)">5 / 5</div><div class="lbl">Beat Baseline</div><div class="note">All ≥ +6.3 PP</div></div>
+</div>
+
+<!-- Model Comparison Table -->
+<div class="section-title">Complete Model Comparison</div>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>Model</th><th>Role</th><th>Test Acc</th><th>Δ Baseline</th><th>F1</th><th>Precision</th><th>Recall</th><th>Threshold τ</th><th>TN</th><th>FP</th><th>FN</th><th>TP</th><th>Time</th><th>Parameters</th></tr></thead>
+  <tbody>
+    <tr><td style="color:var(--dim)">Baseline</td><td>—</td><td>50.22%</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td style="font-weight:700;color:var(--blue)">MLP V2</td><td><span class="tg tg-fl">FILTER</span></td><td class="hi-b">64.04%</td><td class="hi-b">+13.8 PP</td><td>0.563</td><td class="hi-b">0.600</td><td>0.531</td><td>0.50</td><td>998.7K</td><td>377.6K</td><td>501.9K</td><td>567.4K</td><td>43.6 min</td><td>22.1K</td></tr>
+    <tr><td style="font-weight:700;color:var(--red)">LSTM</td><td><span class="tg tg-f">FINDER</span></td><td>57.09%</td><td>+6.9 PP</td><td>0.642</td><td>0.505</td><td class="hi-a">0.878</td><td>0.32</td><td>456.6K</td><td>918.2K</td><td>130.0K</td><td>937.8K</td><td>125.8 min</td><td>631.6K</td></tr>
+    <tr><td style="font-weight:700;color:var(--green)">GRU</td><td><span class="tg tg-f">FINDER</span></td><td>58.42%</td><td>+8.2 PP</td><td class="hi">0.647</td><td>0.514</td><td>0.871</td><td>0.33</td><td>496.8K</td><td>878.0K</td><td>137.7K</td><td>930.1K</td><td>96.7 min</td><td>191.3K</td></tr>
+    <tr><td style="font-weight:700;color:var(--purple)">CNN</td><td><span class="tg tg-f">FINDER</span></td><td>57.93%</td><td>+7.7 PP</td><td>0.645</td><td>0.511</td><td>0.873</td><td>0.31</td><td>483.0K</td><td>891.8K</td><td>135.9K</td><td>931.9K</td><td>45.3 min</td><td>184.4K</td></tr>
+    <tr><td style="font-weight:700;color:#16a34a">LightGBM</td><td><span class="tg tg-f">FINDER</span></td><td>56.47%*</td><td>+6.3 PP*</td><td>0.623</td><td>0.485</td><td>0.861</td><td>0.36</td><td>46.0K*</td><td>84.8K*</td><td>13.1K*</td><td>81.0K*</td><td>8.1 min</td><td>404 trees</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- Charts -->
+<div class="section-title">Performance Charts</div>
+<div class="chart-row c2">
+  <a href="artifacts/images/03_modeling/01_accuracy_f1.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/01_accuracy_f1.png" alt="Accuracy & F1"></a>
+  <a href="artifacts/images/03_modeling/02_precision_recall.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/02_precision_recall.png" alt="Precision vs Recall"></a>
+</div>
+<div class="chart-row c2">
+  <a href="artifacts/images/03_modeling/03_improvement.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/03_improvement.png" alt="Improvement over Baseline"></a>
+  <a href="artifacts/images/03_modeling/04_training_time.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/04_training_time.png" alt="Training Time"></a>
+</div>
+<div class="chart-row c2">
+  <a href="artifacts/images/03_modeling/05_feature_importance.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/05_feature_importance.png" alt="Feature Importance"></a>
+  <a href="artifacts/images/03_modeling/06_threshold_curves.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/06_threshold_curves.png" alt="Threshold Curves"></a>
+</div>
+<div class="chart-row c1">
+  <a href="artifacts/images/03_modeling/07_confusion_matrices.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/07_confusion_matrices.png" alt="Confusion Matrices"></a>
+</div>
+<div class="chart-row c1">
+  <a href="artifacts/images/03_modeling/08_trading_tradeoff.png" target="_blank"><img class="chart-img" src="artifacts/images/03_modeling/08_trading_tradeoff.png" alt="Trading Trade-off"></a>
+</div>
+<div class="chart-row c1">
+  <a href="artifacts/images/04_ensemble/09_ensemble_architecture.png" target="_blank"><img class="chart-img" src="artifacts/images/04_ensemble/09_ensemble_architecture.png" alt="Ensemble Architecture"></a>
+</div>
+
+<div class="ftr">
+  USW TradingModel · Final Results · June 2026 · NVIDIA RTX 3090 (24 GB) · Python 3.13 · PyTorch 2.6 + LightGBM 4.6<br>
+  All charts saved in <code>artifacts/images/</code> · Generated by <code>scripts/07_model_testing/visualize_evaluation.py</code>
+</div>
+
+</div>
+</body>
+</html>
