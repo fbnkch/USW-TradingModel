@@ -21,7 +21,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from pathlib import Path
 
@@ -30,7 +30,9 @@ from utils import (
     PROJECT_ROOT, params,
     get_device, enable_amp,
     load_features, load_scaler, load_class_balance,
-    build_sequences, build_sequences_fast,
+    build_sequences_to_disk,
+    ChunkedShuffleSampler,
+    create_dataloader, validate_batched,
     EarlyStopping, restore_best_model, save_model,
 )
 
@@ -54,7 +56,7 @@ def get_default_config(model_type: str) -> dict:
     configs = {
         "lstm": {
             "seq_len": 30,
-            "batch_size": 256,
+            "batch_size": 1024,
             "epochs": 40,
             "lr": 0.001,
             "hidden_size": 128,
@@ -66,10 +68,12 @@ def get_default_config(model_type: str) -> dict:
             "threshold": 0.5,
             "sample_every": 1,   # 1 = alle Sequenzen verwenden
             "max_files": None,   # None = alle Dateien
+            "num_workers": 0,    # 0 = nötig auf Windows bei >10M Sequenzen (Shared-Memory-Limit)
+            "prefetch_factor": 2,
         },
         "gru": {
             "seq_len": 30,
-            "batch_size": 256,
+            "batch_size": 1024,
             "epochs": 40,
             "lr": 0.001,
             "hidden_size": 128,
@@ -80,10 +84,12 @@ def get_default_config(model_type: str) -> dict:
             "threshold": 0.5,
             "sample_every": 1,
             "max_files": None,
+            "num_workers": 0,
+            "prefetch_factor": 2,
         },
         "cnn": {
             "seq_len": 30,
-            "batch_size": 512,
+            "batch_size": 2048,
             "epochs": 40,
             "lr": 0.001,
             "hidden_channels": 64,
@@ -94,6 +100,8 @@ def get_default_config(model_type: str) -> dict:
             "threshold": 0.5,
             "sample_every": 1,
             "max_files": None,
+            "num_workers": 0,
+            "prefetch_factor": 2,
         },
     }
     if model_type not in configs:
@@ -134,36 +142,48 @@ def train_sequential(
     print(f"Features: {len(features)} | Klassen-Balance: "
           f"{balance['positive_ratio']:.1%} Breakout\n")
 
-    # ── Sequenzen bauen ────────────────────────────────────────
+    # ── Sequenzen bauen (lazy: auf Disk, nicht alles in RAM) ───
+    SEQ_CACHE = PROJECT_ROOT / "data" / "processed" / "sequences"
+
     print("=" * 60)
-    print("Baue Trainings-Sequenzen...")
+    print("Baue Trainings-Sequenzen (lazy → Disk)...")
     train_glob = str(PRE_SPLIT_PATH / "*_train.parquet")
-    X_train, y_train = build_sequences_fast(
+    train_dataset = build_sequences_to_disk(
         train_glob, features, scaler,
+        cache_dir=str(SEQ_CACHE / "train"),
         seq_len=cfg["seq_len"],
         max_files=cfg["max_files"],
         sample_every=cfg["sample_every"],
     )
 
-    print("\nBaue Validierungs-Sequenzen...")
+    print("\nBaue Validierungs-Sequenzen (lazy → Disk)...")
     val_glob = str(PRE_SPLIT_PATH / "*_validation.parquet")
-    X_val, y_val = build_sequences_fast(
+    val_dataset = build_sequences_to_disk(
         val_glob, features, scaler,
+        cache_dir=str(SEQ_CACHE / "validation"),
         seq_len=cfg["seq_len"],
         max_files=cfg["max_files"],
         sample_every=cfg["sample_every"],
+        max_cached=100,  # Val: 100 × ~0.22 GB = 22 GB → passt in 60 GB RAM
     )
 
-    # ── DataLoader ─────────────────────────────────────────────
-    train_dataset = TensorDataset(X_train, y_train)
+    # ── DataLoader mit Chunked-Shuffle-Sampler ────────────────
+    # Shuffled Dateien, sequentiell innerhalb → 100% Cache-Hits
+    train_sampler = ChunkedShuffleSampler(train_dataset, shuffle_within=True)
+    n_workers = cfg.get("num_workers", 0)
+
     loader = DataLoader(
         train_dataset,
         batch_size=cfg["batch_size"],
-        shuffle=True,
+        sampler=train_sampler,
+        num_workers=n_workers,
         pin_memory=(device.type == "cuda"),
-        num_workers=0,  # 0 = kein Multiprocessing (stabiler auf Windows)
+        prefetch_factor=cfg.get("prefetch_factor", 2) if n_workers > 0 else None,
+        persistent_workers=(n_workers > 0),
+        drop_last=False,
     )
-    print(f"\nDataLoader: {len(loader)} Batches à ≤{cfg['batch_size']}")
+    print(f"\nDataLoader: {len(loader)} Batches à ≤{cfg['batch_size']} "
+          f"| Chunked-Shuffle | {n_workers} Workers")
 
     # ── Modell ─────────────────────────────────────────────────
     model_cls = MODEL_CLASSES[model_type]
@@ -194,8 +214,6 @@ def train_sequential(
           f"({trainable_params:,} trainierbar)")
 
     # ── Loss, Optimizer, Scheduler ─────────────────────────────
-    # BCE-Loss mit leichter positiver Gewichtung (Breakouts minimal
-    # seltener als Non-Breakouts → leichter Ausgleich)
     pos_weight = torch.tensor([balance.get("scale_pos_weight", 1.0)]).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
@@ -220,9 +238,8 @@ def train_sequential(
         verbose=True,
     )
 
-    # ── Validierungsdaten auf GPU ──────────────────────────────
-    X_val_gpu = X_val.to(device)
-    y_val_gpu = y_val.to(device)
+    # ── Validierung vorbereiten (per validate_batched, nicht alles auf GPU!) ─
+    val_batch_size = cfg["batch_size"] * 2  # inference kann größere Batches
 
     # ── Training-Loop ──────────────────────────────────────────
     history = {"train_loss": [], "val_loss": [], "val_acc": []}
@@ -231,7 +248,7 @@ def train_sequential(
     print(f"\n{'=' * 60}")
     print(f"Training: {model_type.upper()} | {cfg['epochs']} Epochen "
           f"| Batch-Size {cfg['batch_size']} | LR {cfg['lr']}")
-    print(f"AMP: {use_amp} | Gerät: {device}")
+    print(f"AMP: {use_amp} | Gerät: {device} | Workers: {n_workers}")
     print(f"{'=' * 60}\n")
 
     for epoch in range(1, cfg["epochs"] + 1):
@@ -241,10 +258,11 @@ def train_sequential(
         n_batches = 0
 
         for X_batch, y_batch in loader:
-            X_batch = X_batch.to(device)
-            y_batch = y_batch.to(device)
+            # non_blocking=True: CPU lädt nächsten Batch während GPU rechnet
+            X_batch = X_batch.to(device, non_blocking=True)
+            y_batch = y_batch.to(device, non_blocking=True)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # effizienter als zero_grad()
 
             if use_amp:
                 with torch.amp.autocast("cuda"):
@@ -279,25 +297,23 @@ def train_sequential(
         avg_train_loss = train_loss / max(n_batches, 1)
         history["train_loss"].append(avg_train_loss)
 
-        # ── Validation-Phase ───────────────────────────────
-        model.eval()
-        with torch.no_grad():
-            if use_amp:
-                with torch.amp.autocast("cuda"):
-                    val_logits = model(X_val_gpu).squeeze()
-                    val_loss = criterion(val_logits, y_val_gpu).item()
-            else:
-                val_logits = model(X_val_gpu).squeeze()
-                val_loss = criterion(val_logits, y_val_gpu).item()
-
-            val_prob = torch.sigmoid(val_logits)
-            val_pred = (val_prob > cfg["threshold"]).float()
-            val_acc = (val_pred == y_val_gpu).float().mean().item()
+        # ── Validation-Phase (batched – verhindert GPU-OOM) ─
+        val_result = validate_batched(
+            model, val_dataset,
+            criterion=criterion, device=device,
+            batch_size=val_batch_size,
+            use_amp=use_amp,
+            threshold=cfg["threshold"],
+        )
+        val_loss = val_result["loss"]
+        val_acc = val_result["accuracy"]
 
         history["val_loss"].append(val_loss)
         history["val_acc"].append(val_acc)
 
-        # ── Logging ────────────────────────────────────────
+        # ── Logging (GPU synchronisieren für genaue Zeit) ───
+        if device.type == "cuda":
+            torch.cuda.synchronize()
         elapsed = time.time() - t_start
         print(
             f"Epoch {epoch:3d}/{cfg['epochs']} | "
@@ -319,20 +335,19 @@ def train_sequential(
 
     # ── Bestes Modell wiederherstellen ──────────────────────────
     model = restore_best_model(model, early_stopping)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
     total_time = time.time() - t_start
 
-    # ── Finale Evaluation auf Validation ────────────────────────
-    model.eval()
-    with torch.no_grad():
-        if use_amp:
-            with torch.amp.autocast("cuda"):
-                final_logits = model(X_val_gpu).squeeze()
-        else:
-            final_logits = model(X_val_gpu).squeeze()
-
-        final_prob = torch.sigmoid(final_logits).cpu().numpy()
-        final_pred = (final_prob > cfg["threshold"]).astype(int)
-        final_acc = (final_pred == y_val.numpy()).mean()
+    # ── Finale Evaluation auf Validation (batched) ──────────────
+    final_eval = validate_batched(
+        model, val_dataset,
+        criterion=criterion, device=device,
+        batch_size=val_batch_size,
+        use_amp=use_amp,
+        threshold=cfg["threshold"],
+    )
+    final_acc = final_eval["accuracy"]
 
     # ── Ergebnisse ──────────────────────────────────────────────
     results = {
@@ -401,6 +416,10 @@ if __name__ == "__main__":
         "--sample_every", type=int, default=None,
         help="Nur jede N-te Sequenz verwenden (Subsampling)"
     )
+    parser.add_argument(
+        "--num_workers", type=int, default=None,
+        help="DataLoader Worker (0=stabil auf Windows, >0=schneller auf Linux)"
+    )
     args = parser.parse_args()
 
     # Config-Overrides aus CLI-Argumenten
@@ -415,5 +434,7 @@ if __name__ == "__main__":
         overrides["max_files"] = args.max_files
     if args.sample_every is not None:
         overrides["sample_every"] = args.sample_every
+    if args.num_workers is not None:
+        overrides["num_workers"] = args.num_workers
 
     train_sequential(args.model, overrides if overrides else None)

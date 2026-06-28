@@ -84,7 +84,7 @@ class LSTMBreakoutModel(nn.Module):
             nn.BatchNorm1d(32),
             nn.Dropout(dropout * 0.5),
             nn.Linear(32, 1),
-            nn.Sigmoid(),
+            # Kein Sigmoid – BCEWithLogitsLoss wendet Sigmoid intern an
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -94,7 +94,7 @@ class LSTMBreakoutModel(nn.Module):
             x : (batch, seq_len, n_features)
 
         Returns
-            (batch, 1) – Breakout-Wahrscheinlichkeit
+            (batch, 1) – rohe Logits (BCEWithLogitsLoss-kompatibel)
         """
         # LSTM: output (batch, seq, hidden*D), (h_n, c_n)
         _, (h_n, _) = self.lstm(x)
@@ -164,7 +164,7 @@ class GRUBreakoutModel(nn.Module):
             nn.BatchNorm1d(32),
             nn.Dropout(dropout * 0.5),
             nn.Linear(32, 1),
-            nn.Sigmoid(),
+            # Kein Sigmoid – BCEWithLogitsLoss wendet Sigmoid intern an
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -174,7 +174,7 @@ class GRUBreakoutModel(nn.Module):
             x : (batch, seq_len, n_features)
 
         Returns
-            (batch, 1) – Breakout-Wahrscheinlichkeit
+            (batch, 1) – rohe Logits (BCEWithLogitsLoss-kompatibel)
         """
         _, h_n = self.gru(x)  # h_n: (num_layers, batch, hidden)
         last_hidden = h_n[-1]  # letzte Layer: (batch, hidden)
@@ -253,7 +253,7 @@ class CNNBreakoutModel(nn.Module):
             nn.BatchNorm1d(32),
             nn.Dropout(dropout * 0.5),
             nn.Linear(32, 1),
-            nn.Sigmoid(),
+            # Kein Sigmoid – BCEWithLogitsLoss wendet Sigmoid intern an
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -263,7 +263,7 @@ class CNNBreakoutModel(nn.Module):
             x : (batch, seq_len, n_features)
 
         Returns
-            (batch, 1) – Breakout-Wahrscheinlichkeit
+            (batch, 1) – rohe Logits (BCEWithLogitsLoss-kompatibel)
         """
         # Conv1D erwartet (batch, channels, length)
         x = x.transpose(1, 2)  # (batch, features, seq_len)

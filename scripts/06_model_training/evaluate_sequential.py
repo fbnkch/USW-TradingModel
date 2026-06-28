@@ -19,6 +19,7 @@ import argparse
 import json
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
@@ -163,23 +164,40 @@ def evaluate_sequential(
     print(f"Baue {split}-Sequenzen...")
     split_map = {"validation": "validation", "test": "test"}
     glob_pattern = str(PRE_SPLIT_PATH / f"*_{split_map.get(split, split)}.parquet")
-    X_test, y_test = build_sequences(
+    X_test, y_test_tensor = build_sequences(
         glob_pattern, features, scaler,
         seq_len=30, max_files=max_files,
     )
+    y_test = y_test_tensor.numpy()  # für sklearn-Metriken
 
-    X_test_gpu = X_test.to(device)
-
-    # ── Vorhersagen ─────────────────────────────────────────────
+    # ── Vorhersagen (batched – verhindert GPU-OOM bei >20 GB Daten) ─
     print(f"Mache Vorhersagen auf {X_test.shape[0]:,} Sequenzen...")
+
+    INFER_BATCH = 1024  # Inference-Batch (konservativ, passt in 24 GB VRAM)
+    infer_dataset = TensorDataset(X_test, y_test_tensor)
+    infer_loader = DataLoader(
+        infer_dataset,
+        batch_size=INFER_BATCH,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=(device.type == "cuda"),
+    )
+
+    all_probs = []
+    model.eval()
     with torch.no_grad():
-        if use_amp:
-            with torch.amp.autocast("cuda"):
-                logits = model(X_test_gpu).squeeze()
-                y_prob = torch.sigmoid(logits).cpu().numpy()
-        else:
-            logits = model(X_test_gpu).squeeze()
-            y_prob = torch.sigmoid(logits).cpu().numpy()
+        for (X_batch, _) in infer_loader:
+            X_batch = X_batch.to(device, non_blocking=True)
+            if use_amp:
+                with torch.amp.autocast("cuda"):
+                    logits = model(X_batch).squeeze()
+                    probs = torch.sigmoid(logits)
+            else:
+                logits = model(X_batch).squeeze()
+                probs = torch.sigmoid(logits)
+            all_probs.append(probs.cpu().numpy())
+
+    y_prob = np.concatenate(all_probs)
 
     # ── Threshold-Optimierung (auf Validation) oder fixen Threshold ──
     if threshold is None:
