@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>CNN-1D Architecture</title>
+<style>
+  :root{--bg:#0a0e17;--text:#e2e8f0;--muted:#94a3b8;--dim:#64748b;--blue:#3b82f6;--green:#10b981;--purple:#8b5cf6;--cyan:#06b6d4;--pink:#ec4899;--orange:#f59e0b;--slate:#475569;--darkgreen:#047857}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;padding:20px;display:flex;justify-content:center}
+  .wrap{max-width:1200px}
+  h1{text-align:center;font-size:19px;font-weight:700;margin-bottom:2px;letter-spacing:-0.3px}
+  .sub{text-align:center;font-size:11px;color:var(--muted);margin-bottom:14px}
+
+  .arch{display:flex;align-items:stretch;justify-content:center;gap:0}
+
+  /* Input */
+  .inp-col{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:100px;gap:6px}
+  .inp-box{background:rgba(100,116,139,0.38);border:1px solid rgba(255,255,255,0.10);border-radius:7px;padding:16px 14px;text-align:center}
+  .inp-box .t{font-size:11px;font-weight:700} .inp-box .d{font-size:8.5px;color:var(--dim);margin-top:3px;font-family:'Cascadia Code','Fira Code',monospace}
+  .T{font-size:16px;font-weight:800;color:var(--orange)} .Tsub{font-size:9px;color:var(--dim);font-family:'Cascadia Code','Fira Code',monospace;text-align:center}
+
+  /* Arrows */
+  .arr{display:flex;align-items:center;min-width:24px}
+  .arr svg{width:24px;height:14px}
+
+  /* Conv block */
+  .conv{flex:1;max-width:800px}
+  .conv-enc{background:rgba(139,92,246,0.05);border:1.5px solid rgba(139,92,246,0.25);border-radius:9px;padding:12px 10px 10px}
+  .conv-title{text-align:center;font-size:11px;font-weight:700;color:var(--purple);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:10px}
+  .rows{display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;align-items:center;gap:0}
+  .badge{min-width:46px;text-align:center;font-size:13px;font-weight:800;padding:5px 0;border-radius:5px;color:#fff;margin-right:8px}
+  .k3{background:var(--cyan)} .k5{background:var(--purple)} .k10{background:var(--pink)}
+
+  .boxes{display:flex;align-items:center;gap:0;flex:1}
+  .bx{border-radius:5px;padding:6px 10px;text-align:center;border:1px solid rgba(255,255,255,0.10);min-width:80px}
+  .bx .t{font-size:9.5px;font-weight:700;line-height:1.2} .bx .d{font-size:8px;color:rgba(255,255,255,0.5);margin-top:1px;font-family:'Cascadia Code','Fira Code',monospace}
+  .bc3{background:rgba(6,182,212,0.20)} .bc5{background:rgba(139,92,246,0.20)} .bc10{background:rgba(236,72,153,0.20)}
+  .bbn{background:rgba(71,85,105,0.35)} .bpool{background:rgba(245,158,11,0.18)}
+  .a2{display:flex;align-items:center;min-width:16px}
+  .a2 svg{width:16px;height:10px}
+
+  /* Concat */
+  .cat-box{background:rgba(139,92,246,0.10);border:1.5px solid rgba(139,92,246,0.30);border-radius:7px;padding:12px 10px;text-align:center;display:flex;flex-direction:column;justify-content:center}
+  .cat-box .t{font-size:11px;font-weight:700;color:var(--purple)}
+  .cat-box .d{font-size:9px;color:var(--muted);margin-top:3px;font-family:'Cascadia Code','Fira Code',monospace}
+
+  /* Classifier */
+  .clf{display:flex;flex-direction:column;justify-content:center;gap:0;min-width:130px}
+  .cb{border-radius:6px;padding:9px 14px;text-align:center;border:1px solid rgba(255,255,255,0.10)}
+  .cb .t{font-size:10px;font-weight:700} .cb .d{font-size:8.5px;color:rgba(255,255,255,0.5);margin-top:1px;font-family:'Cascadia Code','Fira Code',monospace}
+  .cbn{background:rgba(71,85,105,0.35)} .clin{background:rgba(59,130,246,0.20)} .cout{background:rgba(4,120,87,0.28)}
+  .ca{font-size:8px;color:var(--dim);margin-left:5px;line-height:1.3;white-space:nowrap}
+  .va{display:flex;justify-content:center;height:6px}
+  .va svg{width:10px;height:6px}
+  .flex-r{display:flex;align-items:center}
+
+  .leg{display:flex;justify-content:center;gap:18px;margin-top:12px;flex-wrap:wrap}
+  .leg span{font-size:10px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>CNN-1D — Multi-Kernel 1D-Convolutional Breakout Classifier</h1>
+<div class="sub">184,385 Parameters · 3× Conv1D (k=3,5,10) · GlobalMaxPool · Concat · Classifier · 12 Epochs</div>
+
+<div class="arch">
+  <!-- INPUT -->
+  <div class="inp-col">
+    <div class="inp-box"><div class="t">Input<br>Sequence</div><div class="d">batch × 30 × 82</div></div>
+    <div class="T">T</div>
+    <div class="Tsub">(batch, 82, 30)</div>
+  </div>
+
+  <div class="arr"><svg viewBox="0 0 24 14"><defs><marker id="ma" markerWidth="5" markerHeight="4" refX="4.5" refY="2" orient="auto"><polygon points="0 0,5 2,0 4" fill="#64748b"/></marker></defs><line x1="1" y1="7" x2="22" y2="7" stroke="#64748b" stroke-width="1" marker-end="url(#ma)"/></svg></div>
+
+  <!-- CONVOLUTION -->
+  <div class="conv">
+    <div class="conv-enc">
+      <div class="conv-title">Multi-Kernel 1D Convolution</div>
+      <div class="rows">
+
+        <!-- k=3 -->
+        <div class="row">
+          <div class="badge k3">k=3</div>
+          <div class="boxes">
+            <div class="bx bc3"><div class="t">Conv1D</div><div class="d">82 → 64</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><defs><marker id="ms" markerWidth="4" markerHeight="3.5" refX="3.5" refY="1.75" orient="auto"><polygon points="0 0,4 1.75,0 3.5" fill="#64748b"/></marker></defs><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bbn"><div class="t">BatchNorm<br>+ ReLU</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bc3"><div class="t">Conv1D</div><div class="d">64 → 64</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bbn"><div class="t">BatchNorm<br>+ ReLU</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bpool"><div class="t">GlobalMax<br>Pool</div></div>
+          </div>
+        </div>
+
+        <!-- k=5 -->
+        <div class="row">
+          <div class="badge k5">k=5</div>
+          <div class="boxes">
+            <div class="bx bc5"><div class="t">Conv1D</div><div class="d">82 → 64</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bbn"><div class="t">BatchNorm<br>+ ReLU</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bc5"><div class="t">Conv1D</div><div class="d">64 → 64</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bbn"><div class="t">BatchNorm<br>+ ReLU</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bpool"><div class="t">GlobalMax<br>Pool</div></div>
+          </div>
+        </div>
+
+        <!-- k=10 -->
+        <div class="row">
+          <div class="badge k10">k=10</div>
+          <div class="boxes">
+            <div class="bx bc10"><div class="t">Conv1D</div><div class="d">82 → 64</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bbn"><div class="t">BatchNorm<br>+ ReLU</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bc10"><div class="t">Conv1D</div><div class="d">64 → 64</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bbn"><div class="t">BatchNorm<br>+ ReLU</div></div>
+            <div class="a2"><svg viewBox="0 0 16 10"><line x1="0" y1="5" x2="15" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#ms)"/></svg></div>
+            <div class="bx bpool"><div class="t">GlobalMax<br>Pool</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Arrow Conv→Concat -->
+  <div class="arr"><svg viewBox="0 0 24 14"><line x1="1" y1="7" x2="22" y2="7" stroke="#8b5cf6" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <!-- CONCAT -->
+  <div style="display:flex;align-items:center">
+    <div class="cat-box"><div class="t">Concat</div><div class="d">64 × 3 = 192</div></div>
+  </div>
+
+  <div class="arr"><svg viewBox="0 0 24 14"><line x1="1" y1="7" x2="22" y2="7" stroke="#8b5cf6" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <!-- CLASSIFIER -->
+  <div class="clf">
+    <div class="cb cbn"><div class="t">BatchNorm</div><div class="d">192</div></div>
+    <div class="va"><svg viewBox="0 0 10 6"><defs><marker id="vd" markerWidth="5" markerHeight="4" refX="2.5" refY="4" orient="auto"><polygon points="0 0,2.5 4,5 0" fill="#64748b"/></marker></defs><line x1="5" y1="0" x2="5" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#vd)"/></svg></div>
+    <div class="flex-r"><div class="cb clin"><div class="t">Linear</div><div class="d">192 → 64</div></div><div class="ca">ReLU<br>BN+Drop 0.245</div></div>
+    <div class="va"><svg viewBox="0 0 10 6"><line x1="5" y1="0" x2="5" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#vd)"/></svg></div>
+    <div class="flex-r"><div class="cb clin"><div class="t">Linear</div><div class="d">64 → 32</div></div><div class="ca">ReLU<br>BN+Drop 0.175</div></div>
+    <div class="va"><svg viewBox="0 0 10 6"><line x1="5" y1="0" x2="5" y2="5" stroke="#64748b" stroke-width="0.9" marker-end="url(#vd)"/></svg></div>
+    <div class="cb cout"><div class="t">Linear</div><div class="d">32 → 1</div></div>
+  </div>
+
+  <div class="arr"><svg viewBox="0 0 24 14"><line x1="1" y1="7" x2="22" y2="7" stroke="#10b981" stroke-width="1.8" marker-end="url(#ma)"/></svg></div>
+
+  <div style="font-size:11px;font-weight:700;color:var(--green);line-height:1.25;display:flex;align-items:center">Logits<br>(BCE Loss)</div>
+</div>
+
+<div class="leg">
+  <span><b style="color:var(--cyan)">■</b> k=3 · 3-min impulses</span>
+  <span><b style="color:var(--purple)">■</b> k=5 · 5-min trends</span>
+  <span><b style="color:var(--pink)">■</b> k=10 · 10-min swells</span>
+  <span><b style="color:var(--orange)">■</b> GlobalMaxPool</span>
+  <span><b style="color:var(--blue)">■</b> Linear</span>
+  <span><b style="color:var(--darkgreen)">■</b> Output</span>
+</div>
+</div>
+</body>
+</html>

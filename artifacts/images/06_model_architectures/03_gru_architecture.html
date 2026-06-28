@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>GRU Architecture</title>
+<style>
+  :root{--bg:#0a0e17;--text:#e2e8f0;--muted:#94a3b8;--dim:#64748b;--blue:#3b82f6;--green:#10b981;--slate:#475569;--darkgreen:#047857}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;padding:28px;display:flex;justify-content:center}
+  .wrap{max-width:1100px}
+  h1{text-align:center;font-size:19px;font-weight:700;margin-bottom:2px;letter-spacing:-0.3px}
+  .sub{text-align:center;font-size:11px;color:var(--muted);margin-bottom:22px}
+  .arch{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap}
+  .box{border-radius:7px;padding:11px 15px;text-align:center;border:1px solid rgba(255,255,255,0.10);min-width:76px}
+  .box .t{font-size:10.5px;font-weight:700;line-height:1.25}
+  .box .d{font-size:8.5px;color:rgba(255,255,255,0.5);margin-top:1px;font-family:'Cascadia Code','Fira Code',monospace}
+  .inp{background:rgba(100,116,139,0.38)}
+  .enc{background:rgba(16,185,129,0.05);border:1.5px solid rgba(16,185,129,0.28);border-radius:9px;padding:12px 14px;text-align:center}
+  .enc .tt{font-size:12px;font-weight:700;color:var(--green);margin-bottom:3px}
+  .enc .dd{font-size:9px;color:var(--muted);font-family:'Cascadia Code','Fira Code',monospace}
+  .hlast{background:rgba(16,185,129,0.13)}
+  .norm{background:rgba(71,85,105,0.32)}
+  .lin{background:rgba(59,130,246,0.20)}
+  .out{background:rgba(4,120,87,0.28)}
+  .arr{display:flex;align-items:center;min-width:22px}
+  .arr svg{width:22px;height:12px}
+  .an{font-size:8px;color:var(--dim);text-align:center;margin:0 2px;line-height:1.35;white-space:nowrap}
+  .leg{display:flex;justify-content:center;gap:20px;margin-top:18px;flex-wrap:wrap}
+  .leg span{font-size:10px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>GRU — Recurrent Sequence Model</h1>
+<div class="sub">191,297 Parameters · GRU (2 layers, 128 hidden) · LayerNorm · Classifier · 27 Epochs</div>
+
+<div class="arch">
+  <div class="box inp"><div class="t">Input<br>Sequence</div><div class="d">batch × 30 × 82</div></div>
+  <div class="arr"><svg viewBox="0 0 22 12"><defs><marker id="ma" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0,6 2.5,0 5" fill="#64748b"/></marker></defs><line x1="1" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <div class="enc">
+    <div class="tt">GRU</div>
+    <div class="dd">2 Layers · hidden=128</div>
+    <div style="margin-top:4px;font-size:8.5px;color:var(--dim);font-style:italic">No cell-state gate · ~15–20% faster than LSTM</div>
+  </div>
+  <div class="arr"><svg viewBox="0 0 22 12"><line x1="1" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <div class="box hlast"><div class="t">h_last</div><div class="d">128</div></div>
+  <div class="arr"><svg viewBox="0 0 22 12"><line x1="1" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <div class="box norm"><div class="t">LayerNorm</div><div class="d">128 · Drop 0.35</div></div>
+  <div class="arr"><svg viewBox="0 0 22 12"><line x1="1" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <div class="box lin"><div class="t">Linear</div><div class="d">128 → 64</div></div>
+  <div class="an">ReLU<br>BN+Drop 0.245</div>
+  <div class="arr"><svg viewBox="0 0 22 12"><line x1="1" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <div class="box lin"><div class="t">Linear</div><div class="d">64 → 32</div></div>
+  <div class="an">ReLU<br>BN+Drop 0.175</div>
+  <div class="arr"><svg viewBox="0 0 22 12"><line x1="1" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="1.1" marker-end="url(#ma)"/></svg></div>
+
+  <div class="box out"><div class="t">Linear</div><div class="d">32 → 1</div></div>
+  <div class="arr"><svg viewBox="0 0 22 12"><line x1="1" y1="6" x2="20" y2="6" stroke="#10b981" stroke-width="1.8" marker-end="url(#ma)"/></svg></div>
+
+  <div style="font-size:11px;font-weight:700;color:var(--green);line-height:1.25">Logits<br>(BCE Loss)</div>
+</div>
+
+<div class="leg">
+  <span><b style="color:var(--green)">■</b> GRU</span>
+  <span><b style="color:var(--blue)">■</b> Linear</span>
+  <span><b style="color:var(--darkgreen)">■</b> Output</span>
+  <span style="color:var(--dim)">vs LSTM: no separate cell-state gate, ~15–20% faster</span>
+</div>
+</div>
+</body>
+</html>

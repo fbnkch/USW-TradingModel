@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MLP V2 Architecture</title>
+<style>
+  :root{--bg:#0a0e17;--text:#e2e8f0;--muted:#94a3b8;--dim:#64748b;--blue:#3b82f6;--green:#10b981}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;padding:20px;display:flex;justify-content:center}
+  svg{display:block;max-width:1150px}
+  .leg{display:flex;justify-content:center;gap:24px;margin-top:8px;flex-wrap:wrap}
+  .leg span{font-size:10px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div>
+<h1 style="text-align:center;font-size:19px;font-weight:700;margin-bottom:2px">MLP V2 — Feed-Forward Breakout Classifier</h1>
+<p style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:10px">22,117 Parameters · 4 Hidden Layers · BatchNorm + ReLU + Dropout (0.40→0.22) · AdamW · BCEWithLogitsLoss</p>
+<svg viewBox="0 0 1150 500" width="1150" height="500"></svg>
+<div class="leg">
+  <span><b style="color:#64748b">●</b> Input (82)</span>
+  <span><b style="color:var(--blue)">●</b> Hidden (128 / 64 / 32 / 16)</span>
+  <span><b style="color:var(--green)">●</b> Output (1)</span>
+  <span style="color:var(--dim)">Connections fade with distance between neurons</span>
+</div>
+</div>
+<script>
+const NS='http://www.w3.org/2000/svg';
+const S=document.querySelector('svg');
+function E(t,a,text){
+  const e=document.createElementNS(NS,t);
+  for(const[k,v]of Object.entries(a||{}))e.setAttribute(k,v);
+  if(text!==undefined)e.textContent=text;
+  return e;
+}
+const T=85,B=345;
+const defs=E('defs');
+const m=E('marker',{id:'ag',markerWidth:8,markerHeight:6,refX:7,refY:3,orient:'auto'});
+m.appendChild(E('polygon',{points:'0 0,8 3,0 6',fill:'#10b981'}));
+defs.appendChild(m);S.appendChild(defs);
+
+const layers=[
+  {name:'Input Layer', dim:'82',  n:82, show:8, x:100,  c:'#64748b',r:7},
+  {name:'Hidden 1',    dim:'128', n:128,show:8, x:260,  c:'#3b82f6',r:7},
+  {name:'Hidden 2',    dim:'64',  n:64, show:8, x:430,  c:'#3b82f6',r:7},
+  {name:'Hidden 3',    dim:'32',  n:32, show:7, x:600,  c:'#3b82f6',r:7},
+  {name:'Hidden 4',    dim:'16',  n:16, show:6, x:770,  c:'#3b82f6',r:7},
+  {name:'Output',      dim:'1',   n:1,  show:1, x:940,  c:'#10b981',r:11},
+];
+
+function ys(n,show,top,bot){
+  if(n===1)return[(top+bot)/2];
+  const r=[],g=(bot-top)/(show-1);
+  for(let i=0;i<show;i++)r.push(top+i*g);
+  return r;
+}
+
+// 1. CONNECTIONS (behind neurons)
+const allN=[];
+for(const L of layers)allN.push(ys(L.n,L.show,T,B).map(y=>({x:L.x,y,r:L.r})));
+
+for(let li=0;li<allN.length-1;li++){
+  const src=allN[li],dst=allN[li+1];
+  for(let si=0;si<src.length;si++){
+    const step=Math.max(1,Math.floor(dst.length/Math.min(4,dst.length)));
+    for(let dj=0;dj<dst.length;dj+=step){
+      const dist=Math.abs(si/Math.max(src.length-1,1)-dj/Math.max(dst.length-1,1));
+      const alpha=(0.04+0.18*(1-dist)).toFixed(3);
+      S.appendChild(E('line',{x1:src[si].x+src[si].r+1,y1:src[si].y,x2:dst[dj].x-dst[dj].r-1,y2:dst[dj].y,stroke:'#3b82f6','stroke-width':0.4,opacity:alpha}));
+    }
+  }
+}
+
+// 2. NEURONS + LABELS
+for(const L of layers){
+  const ny=ys(L.n,L.show,T,B);
+  // ellipsis
+  if(L.show<L.n){
+    S.appendChild(E('text',{x:L.x,y:T-16,'text-anchor':'middle','font-size':9,fill:'#64748b'},'⋮'));
+    S.appendChild(E('text',{x:L.x,y:B+20,'text-anchor':'middle','font-size':9,fill:'#64748b'},'⋮'));
+  }
+  for(const y of ny)S.appendChild(E('circle',{cx:L.x,cy:y,r:L.r,fill:L.c,stroke:'white','stroke-width':0.7}));
+  S.appendChild(E('text',{x:L.x,y:T-32,'text-anchor':'middle','font-size':10,'font-weight':700,fill:'#94a3b8'},L.name));
+  S.appendChild(E('text',{x:L.x,y:T-19,'text-anchor':'middle','font-size':8,fill:'#64748b'},L.dim));
+}
+
+// 3. ANNOTATIONS between layers
+const ann=[
+  {x:180,y:420,t:['BatchNorm','+ ReLU','+ Dropout 0.40']},
+  {x:345,y:420,t:['ReLU','+ BatchNorm','+ Dropout 0.34']},
+  {x:515,y:420,t:['ReLU','+ BatchNorm','+ Dropout 0.28']},
+  {x:685,y:420,t:['ReLU','+ Dropout 0.22']},
+  {x:855,y:420,t:['Sigmoid →']},
+];
+for(const a of ann)for(let i=0;i<a.t.length;i++)S.appendChild(E('text',{x:a.x,y:a.y+i*13,'text-anchor':'middle','font-size':7.5,fill:'#64748b'},a.t[i]));
+
+// 4. OUTPUT ARROW + LABEL
+const out=allN[5][0],ax=out.x+out.r+6;
+S.appendChild(E('line',{x1:ax,y1:out.y,x2:ax+45,y2:out.y,stroke:'#10b981','stroke-width':1.8,'marker-end':'url(#ag)'}));
+S.appendChild(E('text',{x:ax+53,y:out.y-7,'font-size':10,'font-weight':700,fill:'#10b981'},'Breakout'));
+S.appendChild(E('text',{x:ax+53,y:out.y+7,'font-size':10,'font-weight':700,fill:'#10b981'},'Probability [0,1]'));
+
+// 5. FOOTER
+S.appendChild(E('text',{x:575,y:475,'text-anchor':'middle','font-size':8.5,fill:'#64748b'},'22,117 Parameters  |  4 Hidden Layers  |  BatchNorm + ReLU + Dropout (0.40→0.22)  |  BCEWithLogitsLoss'));
+</script>
+</body>
+</html>
