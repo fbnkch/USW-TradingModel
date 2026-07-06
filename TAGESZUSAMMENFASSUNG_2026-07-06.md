@@ -204,9 +204,71 @@ Neue CLI-Parameter (alle mit sinnvollen Defaults):
 
 ---
 
-## 5. Konfiguration fuer den naechsten Handelstag
+## 5. Detaillierte Datenanalyse (Run-003, 48 Trades)
 
-### 5.1 Aktive Schutz-Mechanismen (Default)
+### 5.1 Erwartungswert-Progression
+
+| System | E[Trade] | Formel |
+|--------|----------|--------|
+| ALT (statisch) | -0.009% | 55.9% x 0.362% + 44.1% x (-0.479%) |
+| NEU (dynamisch, alle) | +0.057% | 56.2% x 0.430% + 43.8% x (-0.422%) |
+| NEU (nur 13-15h, ohne Close) | **+0.149%** | 54.5% x 0.539% + 45.5% x (-0.320%) |
+
+Der Sprung von -0.009% auf +0.057% pro Trade ist die zentrale Metrik des Tages.
+Mit 15:00-Cutoff verdreifacht sich der Erwartungswert auf +0.149%.
+
+### 5.2 Haltedauer und Profitabilitaet
+
+| Haltedauer | Trades | PnL | Win | PF |
+|------------|--------|-----|-----|-----|
+| <5 Min | 4 | +0.07% | 50% | 1.15 |
+| 5-15 Min | 22 | -1.81% | 50% | **0.66** |
+| 15-30 Min | 16 | +3.31% | 56% | **2.38** |
+| >30 Min | 6 | +1.59% | 83% | **10.10** |
+
+Die 5-15-Minuten-Trades sind der Problembereich (PF 0.66). Das sind Trades, die
+frueh durch Trailing/Time-Decay ausgestoppt wurden -- die Schutz-Schichten
+greifen, aber der Trade hatte nicht genug Zeit, sich zu entfalten.
+
+Die profitabelsten Trades brauchen 15+ Minuten. Median = 13 Minuten.
+
+### 5.3 Symbol-Konzentration
+
+Die Gewinne konzentrieren sich auf wenige Symbole:
+
+Top-5 (zusammen +5.5% PnL):
+- LCID (6 Trades, +2.12%), MRNA (5 Trades, +2.02%), LRCX (2 Trades, +0.85%),
+  CRWD (1 Trade, +0.55%), FTNT (1 Trade, +0.50%)
+
+Bottom-5 (zusammen -3.5% PnL):
+- CHTR (3 Trades, -1.30%), ON (1 Trade, -0.71%), INTC (1 Trade, -0.56%),
+  ORLY (1 Trade, -0.49%), CTSH (1 Trade, -0.48%)
+
+LCID und MRNA allein generierten +4.14% der +3.16% Gesamt-PnL. Ohne diese
+beiden Symbole waere das System negativ. Diese Konzentration ist ein Risiko --
+faellt eines dieser Symbole aus der NASDAQ-100, bricht eine wichtige Einnahmequelle weg.
+
+### 5.4 Methodische Einschraenkungen
+
+Die heutigen Daten unterliegen folgenden Einschraenkungen:
+
+1. **ALT-Daten heterogen:** Die 143 Trades der statischen Strategie stammen aus
+   mehreren Runs mit unterschiedlichen Parametern (SL=0.20% und SL=1.0%). Sie
+   als eine homogene Gruppe zu behandeln ist methodisch unsauber.
+2. **Sample Size NEU:** 48 Trades sind zu wenig fuer statistische Signifikanz.
+   Der Mann-Whitney-U-Test ergibt p=0.51.
+3. **Open Drive fehlt:** Die beste Phase (09:30-10:30 ET) wurde mit dem neuen
+   System nicht getestet. Ergebnisse koennen in der Morning-Session abweichen.
+4. **15:00-Cutoff retrospektiv:** Die Entscheidung wurde an denselben Daten
+   getroffen, die sie validieren soll. Uebertragbarkeit auf andere Tage ungewiss.
+5. **Ein-Tages-Stichprobe:** Keine Wochentags-Varianz. Montag kann anders
+   aussehen als der heutige Sonntag/Dienstag.
+
+---
+
+## 6. Konfiguration fuer den naechsten Handelstag
+
+### 6.1 Aktive Schutz-Mechanismen (Default)
 
 | Nr. | Mechanismus | Konfiguration |
 |-----|-------------|---------------|
@@ -219,7 +281,7 @@ Neue CLI-Parameter (alle mit sinnvollen Defaults):
 | 7 | Trading-Ende | 15:00 ET (21:00 MESZ) |
 | 8 | Auto-Liquidation | 15:00 ET |
 
-### 5.2 Erwartung fuer vollstaendigen Handelstag (mit 15:00-Cutoff)
+### 6.2 Erwartung fuer vollstaendigen Handelstag (mit 15:00-Cutoff)
 
 | Metrik | Konservativ | Realistisch | Optimistisch |
 |--------|-------------|-------------|--------------|
@@ -231,14 +293,14 @@ Neue CLI-Parameter (alle mit sinnvollen Defaults):
 Annahme: Open Drive (09:30-10:30 ET) wurde heute nicht getestet und sollte die
 Ergebnisse verbessern (hoechste Breakout-Qualitaet des Tages).
 
-### 5.3 Offene Fragen fuer den naechsten Handelstag
+### 6.3 Offene Fragen fuer den naechsten Handelstag
 
 - Open Drive: Bricht die beste Breakout-Phase die heute etablierten Metriken nach oben?
 - Midday: Wiederholen sich 75% Win-Rate und +2.39% PnL?
 - 15:00-Cutoff: Werden gute Trades zwischen 15:00-15:15 verpasst?
 - Trailing-Parameter: Ist 0.50% -> 0.20% ueber 0.50% Ramp optimal?
 
-### 5.4 Startbefehl
+### 6.4 Startbefehl
 
 ```
 cd C:\01_Uni\Projekte\USW\USW-TradingModel
@@ -250,7 +312,7 @@ Der Loop startet, wartet auf 15:30 MESZ (Market Open), tradet bis 21:00 MESZ
 
 ---
 
-## 6. Schnellreferenz
+## 7. Schnellreferenz
 
 ```
 # Standard-Start (alle Schutz-Mechanismen aktiv):

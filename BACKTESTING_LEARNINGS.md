@@ -2,7 +2,7 @@
 
 ---
 
-## 1. Die Ausgangslage: Euphorie nach der Evaluation
+## 1. Die Ausgangslage
 
 Nach dem Training unserer 5 Modelle (MLP V2, LSTM, GRU, CNN, LightGBM) und der Ensemble-Evaluation waren die Ergebnisse vielversprechend:
 
@@ -19,7 +19,7 @@ Die Realität sah anders aus.
 
 ---
 
-## 2. Der erste Backtest: Katastrophe
+## 2. Der erste Backtest:
 
 Der erste realistische Backtest (einfaches `python backtest.py --all`) zeigte:
 
@@ -33,7 +33,7 @@ Der erste realistische Backtest (einfaches `python backtest.py --all`) zeigte:
 
 ---
 
-## 3. Die Wurzel des Problems: Evaluation ≠ Trading
+## 3. Die Wurzel des Problems: Evaluation != Trading
 
 ### 3.1 Was die Evaluation misst
 
@@ -62,9 +62,9 @@ Das ist eine **statische Annahmen-Rechnung**, keine Simulation.
 
 ---
 
-## 4. Die drei Killer-Bugs im Detail
+## 4. Die drei main-Bugs im Detail
 
-### Bug #1: Position Sizing (KRITISCH)
+### Bug #1: Position Sizing
 
 **Der Code (account_manager.py, Zeile 85–96):**
 ```python
@@ -199,21 +199,11 @@ Selbst wenn das Modell PERFEKT wäre und JEDEN Breakout korrekt vorhersagt: Ein 
 
 ---
 
-## 8. Nächste Schritte
-
-1. **[x] Backtest-Tuning abschließen** → Optimale Parameter für Live-Start
-2. **[x] Paper-Trading starten** (06.07.2026, 15:30 MESZ)
-3. **[x] Dynamische Exit-Strategie implementieren** → Trailing Stop + Ratchet-Mode
-4. **[ ] Tägliche Analyse** mit `analyze_day.py`
-5. **[ ] Nach 1 Woche:** Paper-Trading-Ergebnisse mit Backtest-Erwartung vergleichen
-6. **[ ] Trailing-Parameter kalibrieren:** Optimale Werte für `trailing_sl_pct`, `trailing_min_pct`, `trailing_ramp_pct` aus Live-Daten ableiten
-7. **[ ] Entscheidung:** Live-Trading nur, wenn Paper-Trading den Backtest bestätigt
-
 ---
 
-## 9. Live Paper-Trading Ergebnisse — 06.07.2026
+## 8. Live Paper-Trading Ergebnisse — 06.07.2026
 
-### 9.1 Run 1: Erste Stunde (10:00–11:02 ET, SL=0.20%)
+### 8.1 Run 1: Erste Stunde (10:00–11:02 ET, SL=0.20%)
 
 | Metrik | Wert |
 |--------|------|
@@ -231,7 +221,7 @@ Selbst wenn das Modell PERFEKT wäre und JEDEN Breakout korrekt vorhersagt: Ein 
 - `_symbol_traded_today` blockte Wiedereinstiege → nach 30 Min keine neuen Trades
 - Entry-Preis = Bar-Close statt echtem Fill → Terminal-PnL ≠ Realität
 
-### 9.2 Run 2: Nach Bugfixes (10:10–11:24 ET, SL=0.20%)
+### 8.2 Run 2: Nach Bugfixes (10:10–11:24 ET, SL=0.20%)
 
 | Metrik | Wert |
 |--------|------|
@@ -251,7 +241,7 @@ Selbst wenn das Modell PERFEKT wäre und JEDEN Breakout korrekt vorhersagt: Ein 
 - Entry-Preis-Fix: Fill-Preis statt Bar-Close
 - Auto-Close bei Shutdown: `close_all_positions()` verkauft alle offenen Positionen
 
-### 9.3 Erkenntnisse aus den Live-Daten
+### 8.3 Erkenntnisse aus den Live-Daten
 
 1. **Win Rate bei SL=0.20% ist zementiert bei ~48%** — 3 Runs, gleiches Ergebnis. Der enge SL killt korrekte Modell-Vorhersagen durch 1-Min-Rauschen.
 
@@ -261,7 +251,7 @@ Selbst wenn das Modell PERFEKT wäre und JEDEN Breakout korrekt vorhersagt: Ein 
 
 4. **SL=1% ist der logische nächste Schritt** — Wenn 48% der Trades mit SL=0.20% gewinnen, und die Hälfte der Verlierer mit breiterem SL zu Gewinnern werden, steigt die Win Rate auf ~65%. Der Backtest prognostiziert ~70%.
 
-### 9.4 Parameter-Evolution
+### 8.4 Parameter-Evolution
 
 | Parameter | Ursprünglich | Nach Tuning | Nach Live-Test | Aktuell |
 |-----------|-------------|-------------|-----------------|---------|
@@ -273,7 +263,7 @@ Selbst wenn das Modell PERFEKT wäre und JEDEN Breakout korrekt vorhersagt: Ein 
 | **Trailing Stop** | — | — | — | **AN** (graduell, 0.50%→0.20%) |
 | **Ratchet-Mode** | — | — | — | **AN** (TP wird SL-Boden) |
 
-### 9.5 Die neue Exit-Logik im Detail
+### 8.5 Die neue Exit-Logik im Detail
 
 Altes System: TP (+0.25%) oder SL (-1.0%) oder Time-Stop (30 Min) -- statisch.
 Neues System: Vier-Schicht-Modell, dynamisch an Kursverlauf und Marktphase angepasst.
@@ -308,9 +298,9 @@ Phase 3 -- Kurs steigt, TP erreicht:
 
 ---
 
-## 10. Live Paper Trading -- 06.07.2026: Backtest-Prognosen bestaetigt
+## 9. Live Paper Trading -- 06.07.2026: Backtest-Prognosen bestaetigt
 
-### 10.1 Drei Strategie-Phasen an einem Handelstag
+### 9.1 Drei Strategie-Phasen an einem Handelstag
 
 | Phase | Zeit (ET) | Strategie | Trades | PnL | PF | Win |
 |-------|-----------|-----------|--------|-----|----|-----|
@@ -318,7 +308,7 @@ Phase 3 -- Kurs steigt, TP erreicht:
 | 2 | 13:49-15:00 | Dynamisch: Trailing+Ratchet+Decay+Regime | 22 | +3.27% | >2.0 | 55% |
 | 3 | 15:00-15:52 | Dynamisch: Close-Regime (als Fehler erkannt) | 26 | -0.11% | <1.0 | 58% |
 
-### 10.2 Backtest-Prognosen vs. Live-Ergebnisse
+### 9.2 Backtest-Prognosen vs. Live-Ergebnisse
 
 | Backtest-Prognose | Live-Ergebnis | Status |
 |-------------------|---------------|--------|
@@ -328,7 +318,7 @@ Phase 3 -- Kurs steigt, TP erreicht:
 | Time-Stops systematisch negativ | Phase 1: alle Time-Stops negativ, Durchschnitt -0.53% | Bestaetigt |
 | Wash-Trades blocken Wiedereinstiege | Phase 1: 13x Alpaca-Ablehnung | Bestaetigt |
 
-### 10.3 Live-Bugs und ihre Behebung
+### 9.3 Live-Bugs und ihre Behebung
 
 | Bug | Symptom | Fix |
 |-----|---------|-----|
@@ -336,7 +326,7 @@ Phase 3 -- Kurs steigt, TP erreicht:
 | Symbol-Blockade | Keine neuen Trades nach 30 Min | `_symbol_traded_today` entfernt |
 | Wash-Trade-Block | Alpaca lehnt Re-Entry <30s ab | 2-5 Min Regime-Cooldown |
 
-### 10.4 Datenbasierte Entscheidung: Kein Trading nach 15:00 ET
+### 9.4 Datenbasierte Entscheidung: Kein Trading nach 15:00 ET
 
 Die Daten zeigen: Trades nach 15:00 ET haben negative Expected Value.
 
@@ -354,7 +344,7 @@ Markt schliesst, bevor die Strategie ihre Schutz-Mechanismen entfalten kann.
 Loesung: Trading-Ende um 15:00 ET (21:00 MESZ). Keine neuen Einstiege,
 Liquidation aller offenen Positionen. Begruendung rein datenbasiert.
 
-### 10.5 Ursachen der Phase-1-Verluste
+### 9.5 Ursachen der Phase-1-Verluste
 
 Die 143 Trades der statischen Strategie verloren -1.25% aus sechs Gruenden:
 
@@ -373,5 +363,51 @@ Die 143 Trades der statischen Strategie verloren -1.25% aus sechs Gruenden:
 Die acht Schutz-Schichten (Fixer SL, Time-Decay, Trailing, Ratchet,
 Regime-Filter, Regime-Cooldown, 15:00-Cutoff, Auto-Liquidation) haben
 diese sechs Probleme adressiert.
+
+### 10.6 Detaillierte Metriken aus der Tagesanalyse
+
+Erwartungswert-Entwicklung (die zentrale Metrik):
+
+| System | E[Trade] | Zusammensetzung |
+|--------|----------|-----------------|
+| Statisch | -0.009% | 55.9% x 0.362% + 44.1% x (-0.479%) |
+| Dynamisch (alle) | +0.057% | 56.2% x 0.430% + 43.8% x (-0.422%) |
+| Dynamisch (ohne Close) | +0.149% | 54.5% x 0.539% + 45.5% x (-0.320%) |
+
+Der Erwartungswert stieg von negativ auf positiv und verdreifacht sich
+mit dem 15:00-Cutoff nahezu. Das ist die quantitative Rechtfertigung
+fuer die Umstellung.
+
+Haltedauer-Analyse (48 Trades):
+
+| Dauer | Trades | PnL | PF | Interpretation |
+|-------|--------|-----|-----|----------------|
+| <5 Min | 4 | +0.07% | 1.15 | Neutrale Frueh-Ausbrueche |
+| 5-15 Min | 22 | -1.81% | 0.66 | Problemzone: Schutz greift zu frueh |
+| 15-30 Min | 16 | +3.31% | 2.38 | Optimal: Strategie kann wirken |
+| >30 Min | 6 | +1.59% | 10.10 | Grosse Gewinner (Ratchet-Effekt) |
+
+Die 5-15-Minuten-Zone ist der Schluessel zur weiteren Optimierung:
+22 Trades (46% aller Trades) mit PF 0.66. Diese Trades werden durch
+Trailing/Time-Decay ausgestoppt, bevor sie ihren vollen Zyklus entfalten
+koennen. Eine Verlaengerung der Gnadenfrist oder Anpassung der
+Trailing-Parameter koennte diesen Block verbessern.
+
+Symbol-Konzentration als Risiko:
+
+LCID und MRNA generierten zusammen +4.14% der +3.16% Gesamt-PnL. Das
+bedeutet: Ohne diese zwei Symbole waere das neue System negativ. Eine
+Konzentration auf wenige alpha-generierende Symbole ist ein Risiko --
+insbesondere wenn diese aus dem NASDAQ-100 ausscheiden oder sich ihr
+Volatilitaetsprofil aendert.
+
+### 10.7 Methodische Grenzen der heutigen Analyse
+
+1. Die ALT-Daten (143 Trades) sind heterogen -- sie stammen aus mehreren
+   Runs mit unterschiedlichen Parametern und sind kein sauberer Baseline.
+2. 48 Trades im neuen System reichen nicht fuer statistische Signifikanz.
+3. Die Open-Drive-Phase (beste Breakout-Qualitaet) wurde nicht getestet.
+4. Der 15:00-Cutoff ist eine retrospektive Optimierung an einem einzigen Tag.
+5. Ein Handelstag ist keine ausreichende Stichprobe fuer belastbare Schluesse.
 
 **Die 8 Schutz-Schichten (Phase 2+3) haben diese 6 Probleme gelöst.**

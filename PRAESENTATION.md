@@ -292,4 +292,4 @@ A: Systematisch aus Markt-Mikrostruktur-Theorie abgeleitet: Momentum, Trend, Vol
 1. **Ergebnistabelle** (5 Modelle vs. Baseline) – zeigt, dass alle Modelle funktionieren
 2. **Precision/Recall Chart** (Chart 02) – zeigt die zwei Modell-Familien und motiviert das Ensemble
 3. **Ensemble-Architektur** (Chart 09) – zeigt, wie wir die Modelle kombinieren → Trading-Signal
-4. **Exit-Strategie: Vorher → Nachher** – zeigt die Migration von starren Exit-Regeln zum dynamischen Drei-Schicht-System (Fixer SL → Trailing → Ratchet) und erklärt, warum das die Lücke zwischen Prediction und Execution schließt
+4. **Exit-Strategie: Von statisch zu dynamisch** -- Migration von zwei starren Exit-Regeln zum Acht-Schicht-System (Fixer SL, Time-Decay, Trailing, Ratchet, Regime-Filter, Cooldown, 15:00-Cutoff, Auto-Liquidation) und wie das die Luecke zwischen Prediction und Execution schliesst
