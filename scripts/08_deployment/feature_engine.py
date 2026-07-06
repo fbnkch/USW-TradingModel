@@ -1,0 +1,178 @@
+"""
+Feature-Engine: Inkrementelle 82-Feature-Berechnung aus 1-Minuten-Bars.
+
+Verwendet einen Rolling-Buffer-Ansatz:
+- Haelt ~1500 Bars im Speicher pro Symbol
+- Fuehrt die EXAKT gleiche generate_features() Pipeline aus wie das Training
+- Extrahiert nur die Features der neuesten Bar
+- Garantiert identische Features zum Training (kein Bug-Risiko durch Neuimplementierung)
+
+Memory: ~1500 Bars * 82 Features * 4 Bytes * 100 Symbole ~= 50 MB
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+# Import generate_features from the training pipeline
+_SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SCRIPT_DIR.parent / "03_pre_split_prep"))
+from features import generate_features
+
+
+def _to_utc_naive(ts):
+    """Konvertiert Timestamps zu UTC-naive (Training-Format). Funktioniert mit tz-aware und tz-naive."""
+    t = pd.to_datetime(ts)
+    if t.tz is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    return t
+
+
+class FeatureEngine:
+    """Haelt einen Rolling-Buffer pro Symbol und berechnet Features via generate_features()."""
+
+    def __init__(
+        self,
+        symbol: str,
+        warmup_df: pd.DataFrame,
+        scaler,
+        features_list: list[str],
+        ema_periods: list = None,
+        slope_periods: list = None,
+        z_norm_window: int = 1200,
+        buffer_size: int = 1500,
+    ):
+        self.symbol = symbol
+        self.scaler = scaler
+        self.features_list = features_list
+        self.n_features = len(features_list)
+        self.ema_periods = ema_periods or [5, 10, 20, 60, 120, 240]
+        self.slope_periods = slope_periods or [1, 3, 5]
+        self.z_norm_window = z_norm_window
+        self.buffer_size = buffer_size
+
+        # Rolling-Buffer: OHLCV + timestamp
+        required_cols = ["timestamp", "open", "high", "low", "close", "volume", "vwap"]
+        self._buffer = warmup_df[required_cols].copy()
+        self._buffer["timestamp"] = self._buffer["timestamp"].apply(_to_utc_naive)
+        self._buffer = self._buffer.sort_values("timestamp").reset_index(drop=True)
+
+        # Warmup-Check
+        self._ready = len(self._buffer) >= (z_norm_window // 2)  # min_periods=600
+
+        # Sequence-Puffer: letzte 30 Feature-Vektoren fuer sequenzielle Modelle
+        self._seq_buffer: list = []  # list of (82,) numpy arrays
+        self._seq_ready = False
+
+    @property
+    def is_ready(self) -> bool:
+        return self._ready
+
+    @property
+    def seq_ready(self) -> bool:
+        """True wenn genug Feature-Vektoren fuer ein 30er-Sequenz-Fenster vorhanden."""
+        return self._seq_ready
+
+    @property
+    def buffer_len(self) -> int:
+        return len(self._buffer)
+
+    def get_sequence(self) -> Optional[np.ndarray]:
+        """Gibt die letzten 30 Feature-Vektoren als (30, 82) Array zurueck."""
+        if not self._seq_ready:
+            return None
+        return np.stack(self._seq_buffer[-30:], axis=0)  # (30, 82)
+
+    def process_bar(self, bar: dict) -> Optional[np.ndarray]:
+        """Verarbeitet eine neue 1-Minuten-Bar und gibt den 82-Dim Feature-Vektor zurueck.
+
+        Args:
+            bar: Dict mit keys: timestamp, open, high, low, close, volume, vwap
+
+        Returns:
+            (82,) float32 numpy array, oder None wenn Z-Norm noch nicht warm.
+        """
+        # Neue Bar anhaengen
+        new_row = pd.DataFrame([{
+            "timestamp": _to_utc_naive(bar["timestamp"]),
+            "open": float(bar["open"]),
+            "high": float(bar["high"]),
+            "low": float(bar["low"]),
+            "close": float(bar["close"]),
+            "volume": float(bar["volume"]),
+            "vwap": float(bar["vwap"]),
+        }])
+
+        self._buffer = pd.concat(
+            [self._buffer, new_row], ignore_index=True
+        )
+
+        # Buffer trimmen (letzte buffer_size Bars behalten)
+        if len(self._buffer) > self.buffer_size:
+            self._buffer = self._buffer.iloc[-self.buffer_size:].reset_index(drop=True)
+
+        # Features berechnen (generate_features braucht timestamp-Spalte)
+        df_full, _ = generate_features(
+            self._buffer.copy(),
+            ema_periods=self.ema_periods,
+            slope_periods=self.slope_periods,
+            z_norm_window=self.z_norm_window,
+        )
+
+        # Feature-Vektor der LETZTEN Zeile extrahieren
+        latest = df_full.iloc[-1]
+        feature_vec = np.array([latest.get(f, 0.0) for f in self.features_list], dtype=np.float64)
+
+        # Pruefen ob Z-Norm schon warm ist (keine NaN in den Features)
+        if np.any(np.isnan(feature_vec)):
+            self._ready = False
+            return None
+
+        self._ready = True
+
+        # GlobalScaler anwenden
+        feature_vec_scaled = self.scaler.transform(feature_vec.reshape(1, -1)).astype(np.float32)
+        result = feature_vec_scaled[0]  # (82,)
+
+        # Sequence-Puffer updaten (letzte 30 Feature-Vektoren)
+        self._seq_buffer.append(result.copy())
+        if len(self._seq_buffer) > 30:
+            self._seq_buffer.pop(0)
+        self._seq_ready = len(self._seq_buffer) >= 30
+
+        return result
+
+
+class MultiSymbolEngine:
+    """Verwaltet Feature-Engines fuer alle Symbole."""
+
+    def __init__(self, symbols, warmup_bars, scaler, features_list):
+        self.engines = {}
+        for sym in symbols:
+            if sym in warmup_bars and len(warmup_bars[sym]) > 0:
+                self.engines[sym] = FeatureEngine(
+                    sym, warmup_bars[sym], scaler, features_list
+                )
+
+    def process_bars(self, latest_bars: dict) -> dict[str, np.ndarray]:
+        """Verarbeitet neue Bars fuer alle Symbole.
+
+        Returns:
+            {symbol: feature_vector(82,)} fuer Symbole mit warmem Z-Norm.
+        """
+        results = {}
+        for sym, bar in latest_bars.items():
+            if sym not in self.engines:
+                continue
+            fv = self.engines[sym].process_bar(bar)
+            if fv is not None:
+                results[sym] = fv
+        return results
+
+    def ready_symbols(self) -> list[str]:
+        return [s for s, e in self.engines.items() if e.is_ready]

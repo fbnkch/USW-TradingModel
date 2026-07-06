@@ -101,10 +101,57 @@ Ein Trade wird NUR eröffnet, wenn **ALLE** Bedingungen erfüllt sind:
 
 | Exit-Typ | Bedingung | Begründung |
 |----------|-----------|------------|
-| **Take Profit** | Preis ≥ Entry × 1.0036 (+0.36%) | Breakout-Threshold + 20% Puffer |
-| **Stop Loss** | Preis ≤ Entry × 0.9985 (−0.15%) | Halber Breakout-Threshold |
-| **Time Stop** | 30 Minuten ohne TP/SL | Vorhersagehorizont abgelaufen |
+| **Take Profit** | Preis ≥ Entry × 1.0025 (+0.25%) | Unter Modell-Theta (0.30%) für erreichbaren TP |
+| **Stop Loss** | Preis ≤ Entry × 0.99 (−1.0%) | Weiter als Markt-Rauschen (~0.10%) – lässt Trade atmen |
+| **Trailing Stop** | Dynamisch: SL wandert mit steigendem Profit nach oben | Sichert Gewinne, ohne Trades früh auszustoppen |
+| **Ratchet-Exit** | Kurs fällt unter TP-Level (nachdem TP einmal erreicht wurde) | Gewinn gesperrt, Trade läuft weiter |
+| **Time Stop** | 30 Minuten ohne Exit | Vorhersagehorizont abgelaufen |
 | **Signal-Kollaps** | Finder P(breakout) < 0.20 | Modell-Konfidenz eingebrochen |
+
+#### 3.3.1 Trailing Stop Loss (graduell)
+
+Der Trailing Stop ist ein **dynamischer Stop Loss**, der mit steigendem Kurs nach oben wandert, aber niemals fällt.
+
+**Kernidee:** Je weiter der Kurs ins Plus läuft, desto enger wird der Abstand des SL zum aktuellen Höchstpreis – Gewinne werden schrittweise eingesackt.
+
+```
+Trail-Abstand (Abstand SL zu highest_price)
+
+  0.50% ┤╲
+        │  ╲
+  0.35% ┤    ╲         ← Je mehr Profit, desto enger
+        │      ╲
+  0.20% ┤        ╲_____
+        │
+        └─────┼─────────┼────── Profit über Entry
+            0.25%      0.50%
+```
+
+| Parameter | Default | Bedeutung |
+|-----------|---------|-----------|
+| `trailing_sl_pct` | 0.50% | Start-Abstand bei Entry |
+| `trailing_min_pct` | 0.20% | Minimal-Abstand bei vollem Profit |
+| `trailing_ramp_pct` | 0.50% | Profit-Level, bei dem die volle Straffung greift |
+
+**Wichtig:** Der Trailing Stop **schläft bei Entry** – solange der Kurs nicht über den Einstiegspreis steigt, bleibt der fixe SL (−1.0%) unangetastet. Erst wenn `highest_price > entry_price`, wacht der Trailing auf.
+
+#### 3.3.2 Ratchet-Mode (Gewinnsperre)
+
+Der Ratchet-Mode ersetzt den klassischen TP-Exit: Bei Erreichen des TP-Levels wird **nicht verkauft**, sondern der SL auf das TP-Niveau angehoben. Der Trade läuft weiter, kann aber nie mehr unter den ursprünglichen TP-Gewinn fallen.
+
+```
+$85.50 ┤              ╱╲
+       │             ╱  ╲   ← Trailing zieht SL weiter hoch
+$85.00 ┤        ╱──╱    ╲
+       │   ╱──╱           ╲___  Exit via Trailing Stop
+$84.70 ┤══╱════════════════════  ← TP erreicht → SL springt auf $84.70
+       │╱                        KEIN Exit! Trade läuft weiter.
+$84.49 ┼────────────────────────  ← Entry
+       │
+$83.65 ┤- - - - - - - - - - - -  ← Fixer SL (−1%)
+```
+
+**Kombination Ratchet + Trailing = „Gewinne laufen lassen, Verluste begrenzen"**
 
 ---
 
@@ -116,10 +163,21 @@ Ein Trade wird NUR eröffnet, wenn **ALLE** Bedingungen erfüllt sind:
 |-------|------|
 | Max. Risiko pro Trade | 0.5% des Portfolios |
 | Max. Risiko pro Tag | 2.0% des Portfolios |
-| Max. gleichzeitige Positionen | 3 |
+| Max. gleichzeitige Positionen | 10 |
 | Max. Position pro Symbol | 5% des Portfolios |
 
-### 4.2 Kelly Criterion (Half-Kelly)
+### 4.2 Aktuelle Standard-Parameter
+
+| Parameter | Wert | Begründung |
+|-----------|------|------------|
+| `max_positions` | 10 | Diversifikation über mehr Signale |
+| `tp_pct` | 0.25% | Unter Modell-Theta (0.30%), erreichbar |
+| `sl_pct` | 1.00% | Weiter als 1-Min-Rauschen (~0.10%) |
+| `position_size_pct` | 5% | Kapitalerhalt – max 50% Exposure |
+| Trailing SL | AN (default) | Graduell, schläft bei Entry |
+| Ratchet-Mode | AN (default) | TP-Level wird SL-Boden statt Exit |
+
+### 4.3 Kelly Criterion (Half-Kelly)
 
 ```
 f* = (p × b - q) / b
@@ -166,6 +224,8 @@ Half-Kelly: 21.7% des Portfolios pro Trade
 - **Startkapital:** $100.000 (Papiergeld)
 - **Zeitraum:** 2–4 Wochen vor Live-Einsatz
 - **Fokus:** Slippage-Realität, Order-Fill-Rate, Strategie-Stabilität
+- **Startbefehl:** `python scripts/08_deployment/trading_loop.py --paper`
+- **Deaktivieren von Features:** `--no_trailing_sl` / `--no_ratchet`
 
 ---
 

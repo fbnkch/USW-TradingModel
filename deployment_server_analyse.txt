@@ -1,0 +1,239 @@
+================================================================================
+  USW-TradingModel — Deployment-Server-Analyse
+  Stand: 28.06.2026
+================================================================================
+
+FRAGE:
+  Soll das Angebot eines gestellten Servers (Windows Server VM) für den
+  Intraday-Trading-Betrieb auf Alpaca angenommen werden?
+
+KURZANTWORT:
+  Ja — aber nur mit Admin-Zugriff, mindestens 8 GB RAM, und wenn die drei
+  unten genannten Maßnahmen vor Produktivstart umgesetzt werden.
+
+
+================================================================================
+  1. WARUM EIN SERVER ÜBERHAUPT NOTWENDIG IST
+================================================================================
+
+Euer Trading-Loop läuft so ab:
+
+  Jede Minute, 390x pro Handelstag:
+    1. 1-Minuten-Bar von Alpaca abrufen (NASDAQ 100)
+    2. 82 Features berechnen (EMAs, Slopes, MACD, RSI, ...)
+    3. 5 Modelle inferieren (MLP, GRU, CNN, LSTM, LightGBM)
+    4. Ensemble-Votum -> Trading-Signal (Long / Flat / Short)
+    5. Order an Alpaca senden
+
+Ein lokaler Rechner kann das NICHT zuverlässig leisten, weil:
+
+  - Windows-Updates erzwingen Neustarts -> Loop tot
+  - Stromausfall / Internetausfall -> Loop tot
+  - Laptop zugeklappt / Standby -> Loop tot
+  - Andere Programme saugen Ressourcen -> Latenz-Spikes
+
+Ein einziger verpasster 1-Minuten-Bar reißt die 30-Minuten-Feature-Sequenz
+auf. Die Modelle produzieren dann Müll, bis die Sequenz wieder voll ist.
+Das sind 30 Minuten Blindflug. Pro verpasstem Bar.
+
+EIN SERVER IST KEIN NICE-TO-HAVE, SONDERN GRUNDVORAUSSETZUNG FÜR LIVE-TRADING.
+
+
+================================================================================
+  2. WAS DER SERVER KONKRET BRINGT
+================================================================================
+
+  24/7 Uptime:
+    Server sind für Dauerbetrieb ausgelegt. Kein Laptop-Deckel,
+    kein Energiesparmodus, kein "jemand hat den Stecker gezogen".
+
+  Latenz zu Alpaca:
+    Alpacas API-Server stehen in den USA (us-east). Ein US-Server hat
+    <5ms Latenz. Ein deutscher Rechner 100-200ms. Bei 1-Minuten-Bars
+    nicht kriegsentscheidend, aber für Order-Ausführung relevant.
+
+  Trennung Training / Inferenz:
+    Training: Eure lokalen Rechner (GPU, manuell gestartet)
+    Inferenz: Server (CPU, automatisiert 24/7)
+
+  Keine Resourcenkonkurrenz:
+    Der Server macht genau einen Job: Trading-Loop ausführen. Kein
+    Browser mit 40 Tabs, kein Discord, keine Windows-Updates um 2 Uhr
+    nachts (wenn man es richtig konfiguriert).
+
+
+================================================================================
+  3. HARDWARE-ANFORDERUNGEN
+================================================================================
+
+  | Komponente    | Minimum       | Empfohlen     |
+  |---------------|---------------|---------------|
+  | CPU           | 2 Cores       | 4 Cores       |
+  | RAM           | 6 GB          | 8 GB          |
+  | Speicher      | 20 GB SSD     | 50 GB SSD     |
+  | OS            | Windows Srv   | Windows Srv   |
+  | RDP-Zugang    | Ja            | Ja (VPN-only) |
+
+  RAM-Bedarf im Detail:
+
+    Windows Server OS                    ~2,5 GB
+    Python-Prozess (5 Modelle im RAM)    ~1,5 GB
+    Feature-Cache (rolling windows)      ~0,3 GB
+    Puffer                               ~1,7 GB
+    -------------------------------------------
+    Minimum                              6,0 GB
+    Empfohlen                            8,0 GB
+
+  Die 5 Modelle im RAM (Größenordnung):
+    MLP V2        ~90 KB
+    GRU           ~770 KB
+    CNN-1D        ~740 KB
+    LSTM          ~2,5 MB
+    LightGBM      ~5,6 MB
+
+  Die Modelle selbst sind winzig. Das meiste RAM geht für Pandas
+  DataFrames (rolling windows über 100 Aktien mit 82 Features).
+
+  GPU wird NICHT benötigt. Inferenz auf CPU ist für 500 Forward-Passes
+  pro Minute (5 Modelle x 100 Aktien) problemlos in <1 Sekunde machbar.
+
+
+================================================================================
+  4. WINDOWS SERVER: DIE DREI KRITISCHEN PROBLEME
+================================================================================
+
+  Problem 1: Windows Update Reboots (KRITISCH)
+
+    Windows Server erzwingt regelmäßige Neustarts nach Updates. Selbst
+    mit "Active Hours" ist ein unbeaufsichtigter Reboot möglich. Danach
+    ist der Trading-Loop tot, bis jemand eingreift.
+
+    LÖSUNG:
+      Gruppenrichtlinie (gpedit.msc):
+      Computerkonfiguration > Administrative Vorlagen >
+        Windows-Komponenten > Windows Update
+      -> "Automatische Updates so konfigurieren": DEAKTIVIEREN
+
+      Stattdessen: Manuelles Update-Fenster definieren (z.B. Samstag
+      12:00 UTC, außerhalb der Handelszeiten) und in einem Kalender
+      wiederholend eintragen.
+
+    OHNE DIESE MASSNAHME WIRD DER SERVER VERLÄSSLICH AUSFALLEN.
+
+  -------------------------------------------------------------------
+
+  Problem 2: Kein natives Daemon-Management
+
+    Windows hat kein systemd. Der Task Scheduler kann periodische
+    Tasks starten, aber einen Dauer-Loop zuverlässig am Leben halten
+    (Restart bei Crash, Auto-Start nach Reboot) ist damit fummelig.
+
+    LÖSUNG: NSSM (Non-Sucking Service Manager, nssm.cc)
+
+      nssm install USWTradingLoop C:\Python311\python.exe C:\trading\main.py
+      nssm set USWTradingLoop AppDirectory C:\trading
+      nssm set USWTradingLoop Start SERVICE_AUTO_START
+      nssm set USWTradingLoop AppExit Default Restart
+
+    Vorteile gegenüber Task Scheduler:
+      - Startet automatisch nach JEDEM Reboot (auch ungewolltem)
+      - Restartet den Loop wenn er crashed (anhand Exit-Code)
+      - Läuft als Hintergrundprozess, kein eingeloggter User nötig
+      - stdout/stderr werden automatisch in Log-Dateien geschrieben
+
+  -------------------------------------------------------------------
+
+  Problem 3: RDP-Sicherheit
+
+    RDP (Remote Desktop) ist das Windows-Equivalent zu SSH — aber ein
+    viel größeres Angriffsziel. Offenes RDP im Internet wird innerhalb
+    von Stunden von Bots angegriffen (Brute-Force, Exploit-Scans).
+
+    LÖSUNG:
+      Windows Firewall -> Eingehende Regel für Port 3389 (RDP)
+      -> Nur zulassen von: <eure-feste-IP> ODER <VPN-IP-Range>
+
+      Kein RDP direkt aus dem Internet. Nie.
+
+      Wenn ihr keine feste IP habt: Tailscale (kostenlos für kleine
+      Teams) als VPN-Layer zwischen euren Rechnern und dem Server.
+
+
+================================================================================
+  5. CHECKLISTE VOR PRODUKTIVSTART
+================================================================================
+
+  Vor dem ersten echten Trade müssen diese Punkte sitzen:
+
+  [ ] Windows Update deaktiviert, manuelles Update-Fenster definiert
+
+  [ ] Trading-Loop als NSSM-Service eingerichtet
+      - Startet der Service automatisch nach Reboot?
+      - Restartet er nach einem simulierten Crash?
+      - Landen Logs in einer Datei, die ihr einsehen könnt?
+
+  [ ] RDP nur über VPN oder IP-Whitelist erreichbar
+
+  [ ] Alpaca API Keys auf dem Server hinterlegt
+      - Paper-Trading-Key zuerst! (nicht live)
+      - Alpaca IP-Whitelist genutzt?
+      - Keys NUR als Umgebungsvariablen, NIE im Code
+
+  [ ] Externer Healthcheck eingerichtet
+      - Skript auf eurem lokalen Rechner / einem zweiten Server
+      - Prüft: Antwortet der Server? Läuft der Trading-Prozess?
+      - Alert (Discord/Telegram/Email) wenn nicht
+      - GETRENNT vom Trading-Server (sonst fällt der Check mit aus)
+
+  [ ] Paper-Trading-Testlauf: mindestens 1 voller Handelstag
+      - Logs prüfen: jede Minute ein Loop-Durchlauf?
+      - Orders korrekt ausgeführt?
+      - Keine Fehlerlogs?
+
+  [ ] Rollback-Plan: Wenn der Server um 15:35 Uhr ausfällt —
+      wer macht was? (Dokumentiert in einer separaten Datei)
+
+
+================================================================================
+  6. EMPFEHLUNG
+================================================================================
+
+  Angebot annehmen: JA
+
+  Aber nur wenn:
+    - Mindestens 8 GB RAM
+    - Voller Admin-Zugriff (ihr müsst gpedit, NSSM und Firewall selbst
+      konfigurieren können — ohne Admin-Rechte ist der Server wertlos
+      für diesen Zweck)
+    - RDP nur via VPN oder IP-Whitelist
+
+  Das Angebot ist geschenkte Infrastruktur. Der einzige "Haken" ist,
+  dass es Windows Server ist — nicht optimal, aber mit den drei oben
+  genannten Maßnahmen vollständig beherrschbar.
+
+
+================================================================================
+  ANHANG: ALTERNATIVE (FALLS DAS ANGEBOT WEGFÄLLT)
+================================================================================
+
+  Ein eigener Linux-VPS ist günstig und gibt volle Kontrolle:
+
+  | Anbieter  | Modell     | RAM  | CPU  | Preis/Monat |
+  |-----------|------------|------|------|-------------|
+  | Hetzner   | CX22       | 4 GB | 2 vCPU | ~4 EUR    |
+  | Netcup    | RS 1000    | 8 GB | 4 vCPU | ~10 EUR   |
+  | DigitalOcean | Basic   | 4 GB | 2 vCPU | ~24 USD   |
+
+  Vorteil Linux: Kein Windows-Update-Problem, natives systemd für
+  Service-Management, SSH statt RDP, weniger RAM-Overhead.
+
+  Nachteil: TA-Lib-Installation auf Linux ist fummelig (aber lösbar);
+  Pfad-Syntax unterscheidet sich (\ vs /).
+
+  Wenn der gestellte Server in 6 Monaten nicht mehr verfügbar ist:
+  Hetzner CX22 für 4 EUR/Monat als Fallback-Lösung bereithalten.
+
+
+================================================================================
+  ENDE
+================================================================================

@@ -193,14 +193,69 @@ Jede Minute für jede Aktie:
 | E4 | Kurz-Trend positiv | `Slope_close_1` > 0 | Feature #2 |
 | E5 | Keine Mittagsflaute | 10-12h oder 14-15:30 ET | Feature #3 |
 
-### 5.3 Exit-Regeln
+### 5.3 Exit-Strategie: Von statisch zu dynamisch
 
-| Exit | Bedingung |
-|------|-----------|
-| Take Profit | +0.36% ab Entry |
-| Stop Loss | -0.15% ab Entry |
-| Time Stop | 30 Minuten ohne TP/SL |
-| Signal-Kollaps | P(breakout) < 0.20 |
+#### Phase 1 (ursprünglich): Starre Exit-Regeln
+
+| Exit | Bedingung | Problem |
+|------|-----------|---------|
+| Take Profit | +0.36% ab Entry | Über Modell-Theta (0.30%) → viele Trades erreichen TP nie |
+| Stop Loss | −0.15% ab Entry | Innerhalb 1-Min-Rauschen (~0.10%) → ständig ausgestoppt |
+| Time Stop | 30 Minuten | Korrekt, aber ohne Gewinnsicherung |
+
+**Live-Ergebnis mit Phase 1:** Win Rate 48%, Avg Win +0.37%, Avg Loss −0.32%
+
+#### Phase 2 (aktuell): Dynamische Exit-Regeln mit Gewinnsicherung
+
+| Exit | Bedingung | Verbesserung |
+|------|-----------|--------------|
+| Take Profit / Ratchet | +0.25% ab Entry | Unter Modell-Theta → erreichbar; **mit Ratchet: kein Exit, sondern SL springt auf TP-Niveau** |
+| Stop Loss | −1.0% ab Entry | 10× breiter als 1-Min-Rauschen → Trade kann atmen |
+| **Trailing Stop** | Dynamisch: SL wandert mit Profit nach oben | Wacht erst auf wenn Kurs > Entry; Trail-Abstand schrumpft graduell von 0.5% → 0.2% |
+| **Ratchet-Exit** | Kurs fällt unter TP-Level (nach Ratchet-Aktivierung) | Gewinn gesperrt – nie unter ursprünglichen TP fallen |
+| Time Stop | 30 Minuten | Unverändert |
+| Signal-Kollaps | P(breakout) < 0.20 | Unverändert |
+
+#### Warum diese Änderungen?
+
+| Änderung | Vorher | Nachher | Begründung |
+|----------|--------|---------|------------|
+| TP | 0.36% | 0.25% | 0.36% lag ÜBER dem Modell-Target (0.30%) → selbst korrekte Vorhersagen scheiterten |
+| SL | 0.15% | 1.00% | 1-Min-Rauschen ≈ 0.10%. SL bei 0.15% wurde durch Zufallsrauschen getriggert. 1% gibt dem Trade Luft |
+| Trailing Stop | — | Neu | Sichert Gewinne graduell – je mehr Profit, desto enger der SL. **Schläft bei Entry** (fixer 1%-SL bleibt unangetastet) |
+| Ratchet-Mode | — | Neu | Ersetzt blinden TP-Exit: TP erreicht → SL springt auf TP-Niveau. Trade läuft weiter, Gewinn ist gesperrt |
+
+### 5.4 Trailing Stop Loss — So funktioniert's
+
+```
+                    Trail-Abstand (SL zu highest_price)
+
+Profit  0.00% ┤    0.50%  ← Weit: Trade kann atmen
+Profit  0.25% ┤    0.35%  ← Leicht enger (≈TP-Niveau)
+Profit  0.50% ┤    0.20%  ← Eng: Gewinn fast gesperrt
+
+Formel: trail = trailing_sl_pct + (trailing_min_pct - trailing_sl_pct) × profit / ramp
+       trail = 0.50% + (0.20% - 0.50%) × profit / 0.50%
+```
+
+**Warum graduell statt harter Schwelle?** Eine harte Schwelle („ab +0.25% → SL auf Break-Even") erzeugt einen Sprung, der bei 0.249% Profit noch nicht greift. Der graduelle Trail verbessert den SL **ab dem ersten Cent Profit** – kein Sprung, kein „knapp verpasst".
+
+### 5.5 Ratchet-Mode — TP wird zum Sicherheitsnetz
+
+```
+$85.50 ┤              ╱╲
+       │             ╱  ╲   ← Trailing zieht SL weiter hoch
+       │        ╱──╱    ╲
+$84.70 ┤═══════╱══════════════  ← TP erreicht: 🔒 SL springt auf $84.70
+       │╱                        KEIN Exit! Trade läuft weiter
+$84.49 ┼────────────────────────  ← Entry
+       │
+$83.65 ┤- - - - - - - - - - - -  ← Fixer SL (−1%)
+```
+
+**Ohne Ratchet:** TP erreicht → Verkauf bei +0.25%. Kurs steigt weiter auf +1.5% — Chance verpasst.  
+**Mit Ratchet:** TP erreicht → SL auf +0.25% gesperrt. Kurs steigt auf +1.5% → Trailing Stop greift → Exit bei +1.3%.  
+**Beide Male nie unter +0.25%.**
 
 ---
 
@@ -218,13 +273,23 @@ A: Kein Modell ist perfekt. MLP V2 hat hohe Precision, aber niedrigen Recall. LS
 **F: Was ist mit Overfitting?**
 A: Wir nutzen Early Stopping (Patience 10-12), Dropout (0.35-0.4), BatchNorm und Weight Decay. Der Validation Loss liegt nah am Train Loss – kein klares Overfitting-Signal.
 
+**F: Warum Trailing Stop statt festem Stop Loss?**
+A: Ein fixer SL schützt nur vor Verlusten, sichert aber keine Gewinne. Der Trailing Stop wandert mit dem Kurs nach oben – je mehr Profit, desto enger. Er schläft bei Entry (der weite 1%-SL bleibt), wacht erst auf wenn Kurs > Entry, und fällt NIE. So wird Gewinn schrittweise gesichert, ohne Trades früh auszustoppen.
+
+**F: Warum Ratchet-Mode statt klassischem Take Profit?**
+A: Ein fixer TP verkauft blind, selbst wenn der Kurs danach weiter steigt. Der Ratchet-Mode macht aus dem TP-Level eine SL-Unterkante: Erreicht der Kurs den TP, springt der SL auf dieses Niveau – der Gewinn ist gesperrt, aber der Trade läuft weiter. In Kombination mit dem Trailing Stop wird zusätzliches Upside automatisch mitgesichert.
+
+**F: Warum sind Trailing und Ratchet per Default an?**
+A: Beide Features verschlechtern den Worst Case nicht. Der Trailing Stop schläft bei Entry (fixer 1%-SL gilt). Der Ratchet greift nur wenn TP erreicht wird – und dann nur positiv (Gewinnsperre). Es gibt keinen Nachteil, beide standardmäßig zu aktivieren.
+
 **F: Warum diese 82 Features?**
 A: Systematisch aus Markt-Mikrostruktur-Theorie abgeleitet: Momentum, Trend, Volumen, Oszillatoren. LightGBM Feature Importance bestätigt die Auswahl – die wichtigsten Features sind fachlich plausibel.
 
 ---
 
-## 7. Die wichtigsten 3 Slides
+## 7. Die wichtigsten 4 Slides
 
 1. **Ergebnistabelle** (5 Modelle vs. Baseline) – zeigt, dass alle Modelle funktionieren
 2. **Precision/Recall Chart** (Chart 02) – zeigt die zwei Modell-Familien und motiviert das Ensemble
 3. **Ensemble-Architektur** (Chart 09) – zeigt, wie wir die Modelle kombinieren → Trading-Signal
+4. **Exit-Strategie: Vorher → Nachher** – zeigt die Migration von starren Exit-Regeln zum dynamischen Drei-Schicht-System (Fixer SL → Trailing → Ratchet) und erklärt, warum das die Lücke zwischen Prediction und Execution schließt

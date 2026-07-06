@@ -35,3 +35,22 @@ POST_SPLIT:
 
 # Test-Modus: nur erste N Symbole verarbeiten (null = alle)
 SUBSET_SYMBOLS: null
+
+# Step 08 — Deployment: Backtesting
+BACKTEST:
+  INITIAL_CAPITAL: 100000
+  MAX_POSITIONS: 10
+  MAX_RISK_PER_TRADE: 0.005
+  TP_PCT: 0.0025
+  SL_PCT: 0.01
+  TIME_STOP_MINUTES: 30
+  SIGNAL_COLLAPSE_THRESHOLD: 0.20
+  TRANSACTION_COST: 0.0001
+  STRATEGY: "finder_majority"
+  # Trailing Stop (neu!)
+  TRAILING_SL_PCT: 0.005
+  TRAILING_MIN_PCT: 0.002
+  TRAILING_RAMP_PCT: 0.005
+  ENABLE_TRAILING_SL: true
+  # Ratchet-Mode (neu!)
+  RATCHET_MODE: true
