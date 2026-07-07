@@ -128,8 +128,16 @@ class FeatureEngine:
         latest = df_full.iloc[-1]
         feature_vec = np.array([latest.get(f, 0.0) for f in self.features_list], dtype=np.float64)
 
-        # Pruefen ob Z-Norm schon warm ist (keine NaN in den Features)
-        if np.any(np.isnan(feature_vec)):
+        # NaN-Features mit 0.0 fuellen (neutral im Z-Score-Raum).
+        # opening_range_position ist z.B. die ersten 30 Bars eines Tages NaN
+        # (Data-Leakage-Schutz: Hoch/Tief der ersten 30 Min noch nicht bekannt).
+        # Ein einzelnes NaN soll nicht den ganzen Feature-Vektor verwerfen.
+        nan_mask = np.isnan(feature_vec)
+        if nan_mask.any():
+            feature_vec[nan_mask] = 0.0
+
+        # Pruefen ob Z-Norm schon warm ist (>50% NaN = Buffer noch zu klein)
+        if nan_mask.mean() > 0.5:
             self._ready = False
             return None
 
