@@ -277,27 +277,39 @@ class AccountManager:
             # Stufe 1 (0-3 Min): SL 1.50% — nur echte Crashs (>1.5% unter Entry)
             # Stufe 2 (3-5 Min): SL 1.00% — atmen, aber nicht unbegrenzt
             # Normal  (5+  Min): SL 0.60% — normale Disziplin
+            #
+            # BUGFIX (08.07. 18:00): Waehrend der Grace-Phase wird der Time-Decay-SL
+            # deaktiviert. Vorher hat max(base_sl=1.5%, time_sl=0.4%) den engeren
+            # Time-Decay genommen — Grace war wirkungslos.
+            in_grace = age_minutes < self.entry_grace_t2_minutes
             if age_minutes < self.entry_grace_minutes:
-                base_sl = pos.entry_price * (1.0 - self.grace_sl_pct)       # 1.50%
+                active_sl_pct = self.grace_sl_pct        # 1.50%
             elif age_minutes < self.entry_grace_t2_minutes:
-                base_sl = pos.entry_price * (1.0 - self.grace_sl_pct_t2)    # 1.00%
+                active_sl_pct = self.grace_sl_pct_t2     # 1.00%
             else:
-                base_sl = pos.sl_price                                       # 0.60%
+                active_sl_pct = self.sl_pct              # 0.60%
 
-            grace = float(self.sl_time_decay_grace)
+            # Time-Decay: Nur AUSSERHALB der Entry-Grace aktiv.
+            # Waehrend der Grace-Phase (0-5 Min) gibt es KEINEN Time-Decay —
+            # die Grace-Stufen sind der einzige Schutz. Verhindert dass der
+            # engere Time-Decay-SL den Grace-Schutz ueberschreibt (Bug 18:00).
             pos_time_stop = float(getattr(pos, 'time_stop_minutes', self.time_stop_minutes))
-            remaining = pos_time_stop - grace
-            if remaining > 0 and age_minutes > grace:
-                time_ratio = min(1.0, (age_minutes - grace) / remaining)
-                decay_sl_pct = self.sl_pct + (self.sl_time_decay_target - self.sl_pct) * time_ratio
+            if in_grace:
+                time_sl = 0.0  # Kein Time-Decay waehrend Grace
             else:
-                decay_sl_pct = self.sl_pct  # Noch in der Gnadenfrist
-            time_sl = pos.entry_price * (1.0 - decay_sl_pct)
+                grace_decay = float(self.sl_time_decay_grace)
+                remaining = pos_time_stop - grace_decay
+                if remaining > 0 and age_minutes > grace_decay:
+                    time_ratio = min(1.0, (age_minutes - grace_decay) / remaining)
+                    decay_sl_pct = self.sl_pct + (self.sl_time_decay_target - self.sl_pct) * time_ratio
+                else:
+                    decay_sl_pct = self.sl_pct
+                time_sl = pos.entry_price * (1.0 - decay_sl_pct)
+
+            base_sl = pos.entry_price * (1.0 - active_sl_pct)
 
             # Effektiven Stop Loss berechnen (Maximum aller Schutz-Schichten)
             # Trailing greift ERST wenn Kurs mindestens trailing_sl_pct ueber Entry war.
-            # Verhindert Mikro-Wackler: Ohne diese Schwelle wuerde schon +0.01% den
-            # Trailing aktivieren und Trades nach 2 Min bei -0.2% killen.
             trailing_active = (
                 self.enable_trailing_sl
                 and pos.highest_price >= pos.entry_price * (1.0 + self.trailing_sl_pct)
