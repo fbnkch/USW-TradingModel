@@ -75,7 +75,7 @@ FINDER_THRESHOLDS = {
     "cnn": 0.314,
     "lightgbm": 0.355,
 }
-FILTER_THRESHOLD = 0.50       # MLP V2 (optimal bei 0.50)
+FILTER_THRESHOLD = 0.75       # MLP V2 (angehoben von 0.50 — war zu niedrig kalibriert)
 
 # Validation F1-Scores (aus model_comparison.json)
 F1_VAL = {

@@ -69,6 +69,9 @@ class FeatureEngine:
         self._seq_buffer: list = []  # list of (82,) numpy arrays
         self._seq_ready = False
 
+        # Sequence-Buffer aus Warmup-Daten vorfuellen (Bug-Fix: vorher blieb er leer!)
+        self._warmup_sequence_buffer()
+
     @property
     def is_ready(self) -> bool:
         return self._ready
@@ -81,6 +84,53 @@ class FeatureEngine:
     @property
     def buffer_len(self) -> int:
         return len(self._buffer)
+
+    def _warmup_sequence_buffer(self):
+        """Fuellt den Sequence-Buffer aus den Warmup-Daten vor (EINZIGER generate_features-Aufruf).
+
+        WICHTIG: Ohne diesen Schritt waere get_sequence() die ersten 30 Minuten
+        des Trading-Tages None, und LSTM/GRU/CNN wuerden auf LightGBM-Werte
+        zurueckfallen.
+
+        Strategie: Einmal generate_features() auf dem kompletten Warmup-Buffer,
+        dann die letzten 30 Feature-Vektoren skalieren und direkt in den
+        Sequence-Buffer legen. O(1) pro Symbol statt O(60) process_bar-Aufrufe.
+        """
+        min_bars = max(self.z_norm_window // 2, 60)
+        if len(self._buffer) < min_bars:
+            return
+
+        # Einmal Features berechnen — nur die letzten 200 Bars (z-Norm braucht
+        # 1200, aber 200 reicht fuer initialen Sequence-Buffer; wird innerhalb
+        # von 30 Minuten durch echte Process-Bar-Durchlaeufe ueberschrieben)
+        # 200 Bars × 95 Symbole ~ 3s statt 1500 Bars × 95 Symbole ~ 60s
+        n_warmup_bars = min(200, len(self._buffer))
+        df_full, _ = generate_features(
+            self._buffer.iloc[-n_warmup_bars:].copy(),
+            ema_periods=self.ema_periods,
+            slope_periods=self.slope_periods,
+            z_norm_window=min(self.z_norm_window, n_warmup_bars),
+        )
+
+        # Letzte 30 Zeilen extrahieren (genug fuer 30er-Sequenz-Fenster)
+        recent = df_full.iloc[-30:]
+
+        for i in range(len(recent)):
+            row = recent.iloc[i]
+            feature_vec = np.array(
+                [row.get(f, 0.0) for f in self.features_list], dtype=np.float64
+            )
+
+            # NaN mit 0.0 fuellen (neutral im Z-Score-Raum)
+            nan_mask = np.isnan(feature_vec)
+            if nan_mask.any():
+                feature_vec[nan_mask] = 0.0
+
+            # GlobalScaler anwenden
+            scaled = self.scaler.transform(feature_vec.reshape(1, -1)).astype(np.float32)
+            self._seq_buffer.append(scaled[0].copy())
+
+        self._seq_ready = len(self._seq_buffer) >= 30
 
     def get_sequence(self) -> Optional[np.ndarray]:
         """Gibt die letzten 30 Feature-Vektoren als (30, 82) Array zurueck."""

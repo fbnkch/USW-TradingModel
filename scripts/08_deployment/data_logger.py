@@ -240,7 +240,7 @@ class DataLogger:
         self.flush_bars()
         self.flush_signals()
         self.flush_orders()
-        print(f"[DataLogger] Puffer geleert → {self.run_dir}")
+        print(f"[DataLogger] Puffer geleert -> {self.run_dir}")
 
     # ---- Summary -------------------------------------------------------
 

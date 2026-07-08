@@ -59,12 +59,40 @@ MARKET_TIMEZONE = "US/Eastern"
 SEQ_LEN = 30
 FINDER_NAMES = ["lstm", "gru", "cnn", "lightgbm"]
 FINDER_THRESHOLDS = {"lstm": 0.32, "gru": 0.334, "cnn": 0.314, "lightgbm": 0.355}
-FILTER_THRESHOLD = 0.50
+
+# ---- Signal-Qualitaets-Filter (Meta-Labeling nach Lopez de Prado) ----
+# Statt einfachem Threshold: Quality-Score aus MLP-Confidence + Finder-Agreement.
+# Research: Entropy-Filtered ML (Serban & Vrinceanu, 2026) + Meta-Labeling
+# Nur Top-2 Signale pro Minute werden gehandelt (Qualitaet > Quantitaet)
+# Keine kuenstlichen Caps — der Quality-Floor + Regime-Parameter regeln die
+# Anzahl auf natuerliche Weise. Wenn 50 Signale mit Quality>0.60 reinkommen,
+# sollen die auch gehandelt werden. (Die Realitaet: das passiert nicht.)
+FILTER_THRESHOLD = 0.85       # MLP Gate: hoehere Huerde (0.75 -> 0.85)
+MAX_SIGNALS_PER_MINUTE = 2     # Top-N Ranking statt Threshold-Filter
+FINDER_STD_MAX = 0.08          # Max. StdDev der 4 Finder-Probs (strenger: 0.10 -> 0.08)
+MIN_QUALITY_SCORE = 0.40       # Default Quality-Floor (pro Regime ueberschreibbar)
+MAX_DAILY_TRADES = 50          # Reines Safety-Net (kein kuenstliches Cap)
 
 # Finder-Gewichte (normalisiert aus F1)
 _F1 = {"lstm": 0.642, "gru": 0.647, "cnn": 0.645, "lightgbm": 0.623}
 _F1_SUM = sum(_F1.values())
 FINDER_WEIGHTS = {k: v / _F1_SUM for k, v in _F1.items()}
+
+# Sektor-Mapping fuer Konzentrations-Limits (NASDAQ-100)
+SECTOR_MAP = {
+    "AMD": "semis", "INTC": "semis", "NVDA": "semis", "QCOM": "semis",
+    "MRVL": "semis", "LRCX": "semis", "AMAT": "semis", "KLAC": "semis",
+    "MU": "semis", "MCHP": "semis", "ON": "semis", "GFS": "semis",
+    "NXPI": "semis", "ADI": "semis", "TXN": "semis", "AVGO": "semis",
+    "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "META": "tech",
+    "CRWD": "security", "ZS": "security", "PANW": "security", "FTNT": "security",
+    "DDOG": "software", "TEAM": "software", "WDAY": "software", "ADBE": "software",
+    "RIVN": "ev", "LCID": "ev", "TSLA": "ev",
+    "MRNA": "biotech", "ALGN": "biotech", "REGN": "biotech", "VRTX": "biotech",
+    "ENPH": "energy", "FSLR": "energy",
+    "CHTR": "telecom", "CSGP": "realestate", "CSCO": "networking",
+}
+MAX_POSITIONS_PER_SECTOR = 2   # Max. 2 Positionen pro Sektor gleichzeitig
 
 
 # ---- CLI ----
@@ -77,29 +105,30 @@ def parse_args():
                    help="Paper-Trading-Modus (default)")
     p.add_argument("--symbols", type=int, default=None,
                    help="Anzahl Symbole (default: alle)")
-    p.add_argument("--max_positions", type=int, default=10)
+    p.add_argument("--max_positions", type=int, default=3,
+                   help="Max. gleichzeitige Positionen (default: 3)")
     p.add_argument("--risk", type=float, default=0.005,
                    help="Max. Risk pro Trade (default: 0.5%%)")
-    p.add_argument("--tp_pct", type=float, default=0.0025,
-                   help="Take-Profit in %% (default: 0.25%%)")
-    p.add_argument("--sl_pct", type=float, default=0.01,
-                   help="Stop-Loss in %% (default: 1.0%%)")
-    p.add_argument("--no_trailing_sl", action="store_true",
-                   help="Graduellen Trailing Stop Loss deaktivieren")
+    p.add_argument("--tp_pct", type=float, default=0.005,
+                   help="Take-Profit in %% (default: 0.5%%)")
+    p.add_argument("--sl_pct", type=float, default=0.0040,
+                   help="Stop-Loss in %% (default: 0.40%% -> R:R ~1:1.25)")
+    p.add_argument("--trailing_sl", action="store_true", default=False,
+                   help="Trailing Stop Loss AKTIVIEREN (default: AUS)")
     p.add_argument("--no_ratchet", action="store_true",
                    help="Ratchet-Mode deaktivieren (klassischer TP-Exit)")
-    p.add_argument("--reentry_cooldown", type=int, default=5,
-                   help="Wash-Trade-Sperre in Minuten nach Exit (default: 5)")
-    p.add_argument("--sl_time_decay_target", type=float, default=0.003,
-                   help="SL am Ende der Time-Stop-Frist (default: 0.3%%)")
+    p.add_argument("--reentry_cooldown", type=int, default=15,
+                   help="Wash-Trade-Sperre in Minuten nach Exit (default: 15)")
+    p.add_argument("--sl_time_decay_target", type=float, default=0.0035,
+                   help="SL am Ende der Time-Stop-Frist (default: 0.35%%)")
     p.add_argument("--sl_time_decay_grace", type=int, default=10,
                    help="Gnadenfrist in Min bevor Time-Decay einsetzt (default: 10)")
-    p.add_argument("--trailing_sl_pct", type=float, default=0.005,
-                   help="Trailing-Stop Start-Abstand bei Entry (default: 0.5%%)")
-    p.add_argument("--trailing_min_pct", type=float, default=0.002,
-                   help="Trailing-Stop Minimal-Abstand bei vollem Profit (default: 0.2%%)")
-    p.add_argument("--trailing_ramp_pct", type=float, default=0.005,
-                   help="Profit-Level fuer vollen Trail-Lock (default: 0.5%%)")
+    p.add_argument("--trailing_sl_pct", type=float, default=0.008,
+                   help="Trailing-Stop Start-Abstand bei Entry (default: 0.8%%)")
+    p.add_argument("--trailing_min_pct", type=float, default=0.004,
+                   help="Trailing-Stop Minimal-Abstand bei vollem Profit (default: 0.4%%)")
+    p.add_argument("--trailing_ramp_pct", type=float, default=0.008,
+                   help="Profit-Level fuer vollen Trail-Lock (default: 0.8%%)")
     p.add_argument("--no_entry_rules", action="store_true",
                    help="Entry-Rules E3-E5 deaktivieren")
     p.add_argument("--position_size_pct", type=float, default=0.05,
@@ -108,6 +137,12 @@ def parse_args():
                    help="Nur EINE Iteration ausfuehren und beenden")
     p.add_argument("--start_hour", type=int, default=15,
                    help="Start-Stunde MESZ (default: 15 = 15:30 MESZ)")
+    p.add_argument("--max_daily_trades", type=int, default=MAX_DAILY_TRADES,
+                   help=f"Safety-Net: Max. Trades pro Tag (default: {MAX_DAILY_TRADES}, rein technische Notbremse)")
+    p.add_argument("--mlp_threshold", type=float, default=0.85,
+                   help="MLP-Gate-Schwelle (default: 0.85)")
+    p.add_argument("--min_quality", type=float, default=MIN_QUALITY_SCORE,
+                   help=f"Quality-Floor: Signale darunter werden ignoriert (default: {MIN_QUALITY_SCORE})")
     return p.parse_args()
 
 
@@ -326,53 +361,138 @@ def ensemble_predict(models: dict, features: np.ndarray, sequence: np.ndarray,
     return signal, finder_score, probs
 
 
+# ---- Signal Quality Scoring (Meta-Labeling + Entropy Filter) ----------
+
+def compute_signal_quality(probs: dict, finder_score: float) -> float:
+    """Berechnet Quality-Score fuer ein Signal (0..1, hoeher = besser).
+
+    Research-Basis:
+      - Meta-Labeling (Lopez de Prado): Secondary model confidence gewichtet primary signal
+      - Entropy-Filtered ML (Serban & Vrinceanu, 2026): Low model disagreement = reliable
+      - Hermes-Trader Staged Filtering: Combine multiple quality dimensions
+
+    Formel:
+      quality = MLP_confidence * ensemble_score * (1 - 0.5 * finder_std_norm)
+        wobei finder_std_norm = min(1.0, finder_std / FINDER_STD_MAX)
+
+    Bei perfekter Uebereinstimmung (std=0): quality = p_mlp * score
+    Bei max. Uneinigkeit  (std>=0.10): quality = p_mlp * score * 0.5
+    """
+    finder_probs = np.array([
+        probs["lstm"], probs["gru"], probs["cnn"], probs["lightgbm"]
+    ])
+    finder_std = float(np.std(finder_probs))
+    finder_std_norm = min(1.0, finder_std / FINDER_STD_MAX)  # 0..1
+    agreement_factor = 1.0 - 0.5 * finder_std_norm       # 0.5..1.0
+
+    quality = probs["mlp"] * finder_score * agreement_factor
+    return float(quality)
+
+
+def filter_top_signals(
+    signals: list[tuple],  # [(sym, price, score, probs, regime), ...]
+    max_signals: int = MAX_SIGNALS_PER_MINUTE,
+    min_quality: float = MIN_QUALITY_SCORE,
+) -> list[tuple]:
+    """Rankt Signale nach Quality-Score und nimmt nur die Top-N.
+
+    ZWEI HURDEN:
+      1. MIN_QUALITY_SCORE: Alles darunter fliegt raus — auch wenn es das
+         einzige Signal der Minute ist. Kein "bester aus einem schlechten
+         Haufen"-Prinzip.
+      2. MAX_SIGNALS_PER_MINUTE: Aus den verbleibenden nur die Top-N.
+
+    Args:
+        signals: Liste von (symbol, price, finder_score, probs, regime)
+        max_signals: Max. Anzahl Signale die durchkommen
+        min_quality: Harte Quality-Schwelle (default aus Konstanten)
+
+    Returns:
+        Gefilterte Liste, sortiert nach Quality (bestes zuerst)
+    """
+    # Phase 1: Quality berechnen + Floor-Filter
+    scored = []
+    dropped = 0
+    for sym, price, score, probs, regime in signals:
+        quality = compute_signal_quality(probs, score)
+        if quality < min_quality:
+            dropped += 1
+            continue
+        scored.append((quality, sym, price, score, probs, regime))
+
+    if dropped > 0:
+        print(f"  [FILTER] {dropped} Signal(e) unter Quality-Floor ({min_quality}) verworfen")
+
+    if not scored:
+        return []
+
+    # Phase 2: Nach Quality ranken, Top-N nehmen
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    if len(scored) > max_signals:
+        dropped_topn = len(scored) - max_signals
+        print(f"  [FILTER] {dropped_topn} Signal(e) ausserhalb Top-{max_signals} verworfen")
+        scored = scored[:max_signals]
+
+    return [(sym, price, score, probs, regime)
+            for _, sym, price, score, probs, regime in scored]
+
+
 # ---- Entry Rules: Regime-basiert (kein binaeres Filtern!) ------------
 
 def _build_feature_index(feature_names: list[str]) -> dict[str, int]:
-    """Baut name→index Mapping fuer schnellen Feature-Zugriff."""
+    """Baut name->index Mapping fuer schnellen Feature-Zugriff."""
     return {name: i for i, name in enumerate(feature_names)}
 
 
 def get_market_regime(now_et) -> dict:
     """Bestimmt das aktuelle Markt-Regime und gibt Risiko-Multiplikatoren zurueck.
 
-    Statt Trades binaer zu blocken (Amateur-Ansatz), werden die Parameter
-    an die Marktphase angepasst (Quant-Ansatz):
-
-      - Mittags (12:00–14:00 ET): Hoehere Signal-Huerde, kleinere Position,
-        kuerzerer Time-Stop. ~50% Fake-Breakout-Rate → nur starke Signale.
-      - Close (15:30–16:00 ET): Kleinere Position, kuerzerer Stop.
-        Hohe Volatilitaet + Mean-Reversion-Risiko.
-      - Open/Morning/Afternoon: Volle Parameter.
+    Research-backed Regime (Intraday Volatility Breakout + ORB):
+      - Open Drive (09:30–10:30): Beste Breakout-Qualitaet, volle Positionen
+      - Late Morning (10:30–12:00): Gute Bedingungen, normale Parameter
+      - Midday (12:00–14:00): KEINE neuen Einstiege! Daten zeigen WR=44-53%
+        aber negative avg PnL (-0.15%) = Fake-Breakouts mit grossen Verlusten.
+        Research: 50% Fake-Breakout-Rate in Mittagsflaute.
+      - Afternoon (14:00–15:00): Erholung, reduzierte Groesse
+      - Close (15:00–16:00): KEIN Trading (Liquidation only)
 
     Returns dict mit Multiplikatoren fuer Schwelle, Positionsgroesse, Time-Stop.
     """
     if now_et is None:
-        return {"name": "unknown", "finder_votes_needed": 2, "size_mult": 1.0, "time_stop_min": 30}
+        return {"name": "unknown", "finder_votes_needed": 2, "size_mult": 1.0,
+                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 5}
 
     t = now_et.time()
     morning_start = pd.to_datetime("09:30").time()
     late_morning = pd.to_datetime("10:30").time()
     midday_start = pd.to_datetime("12:00").time()
     afternoon_start = pd.to_datetime("14:00").time()
-    close_start = pd.to_datetime("15:30").time()
+    close_start = pd.to_datetime("15:00").time()
     market_close = pd.to_datetime("16:00").time()
 
     if morning_start <= t < late_morning:
-        # Open Drive: hoechste Volatilitaet, beste Breakout-Qualitaet
-        # → kurzer Cooldown (viele echte Breakouts in Folge), volle Position
-        return {"name": "open_drive", "finder_votes_needed": 2, "size_mult": 1.0, "time_stop_min": 30, "cooldown_min": 2}
+        return {"name": "open_drive", "finder_votes_needed": 2, "size_mult": 1.0,
+                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 2}
     elif late_morning <= t < midday_start:
-        return {"name": "late_morning", "finder_votes_needed": 2, "size_mult": 1.0, "time_stop_min": 30, "cooldown_min": 3}
+        return {"name": "late_morning", "finder_votes_needed": 2, "size_mult": 0.8,
+                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 3}
     elif midday_start <= t < afternoon_start:
-        # Mittagstief: 50% Fake-Breakouts → hoehere Huerde, kleiner, laengerer Cooldown
-        return {"name": "midday", "finder_votes_needed": 3, "size_mult": 0.6, "time_stop_min": 20, "cooldown_min": 5}
+        # MIDDAY: Einstiege erlaubt, aber DEUTLICH strenger.
+        # Daten: 27-37% WR, negative avg PnL (-0.15%) = Fake-Breakout-Zone.
+        # Statt blindem Block: Quality-Floor massiv anheben (0.55), 3 Finder-Votes,
+        # kleinere Position (40%), kuerzerer Time-Stop (20 Min), laengerer Cooldown.
+        # Nur wirklich klare Signale ueberleben diesen Filter.
+        return {"name": "midday", "finder_votes_needed": 3, "size_mult": 0.4,
+                "time_stop_min": 20, "allow_entries": True, "cooldown_min": 5,
+                "min_quality_override": 0.55}
     elif afternoon_start <= t < close_start:
-        return {"name": "afternoon", "finder_votes_needed": 2, "size_mult": 1.0, "time_stop_min": 30, "cooldown_min": 3}
+        return {"name": "afternoon", "finder_votes_needed": 2, "size_mult": 0.8,
+                "time_stop_min": 25, "allow_entries": True, "cooldown_min": 3}
     else:
-        # After 15:30 ET: KEIN Trading mehr (Daten: negative EV, Win=40%, -1.97% PnL)
-        # Liquidation + Entry-Stopp greifen automatisch bei 15:00 ET
-        return {"name": "no_trading", "finder_votes_needed": 99, "size_mult": 0.0, "time_stop_min": 1, "cooldown_min": 99}
+        # After 15:00 ET: KEIN Trading (Liquidation only — Daten: negative EV)
+        return {"name": "no_trading", "finder_votes_needed": 99, "size_mult": 0.0,
+                "time_stop_min": 1, "allow_entries": False, "cooldown_min": 99}
 
 
 def check_entry_rules(
@@ -459,7 +579,7 @@ def main():
     with open(feat_path) as f:
         features_list = [line.strip() for line in f if line.strip()]
 
-    # Feature-Name → Index (fuer Entry-Rules E3/E4)
+    # Feature-Name -> Index (fuer Entry-Rules E3/E4)
     feature_index = _build_feature_index(features_list)
 
     scaler_path = _PROJECT_ROOT / "data" / "processed" / "global_scaler.pkl"
@@ -469,10 +589,12 @@ def main():
     run_params = {
         "mode": "dry_run" if args.dry_run else "paper",
         "max_positions": args.max_positions,
+        "max_daily_trades": args.max_daily_trades,
         "tp_pct": args.tp_pct,
         "sl_pct": args.sl_pct,
+        "rr_ratio": args.tp_pct / args.sl_pct if args.sl_pct > 0 else 0,
         "position_size_pct": args.position_size_pct,
-        "trailing_sl": not args.no_trailing_sl,
+        "trailing_sl": args.trailing_sl,
         "trailing_sl_pct": args.trailing_sl_pct,
         "trailing_min_pct": args.trailing_min_pct,
         "trailing_ramp_pct": args.trailing_ramp_pct,
@@ -484,6 +606,12 @@ def main():
         "signal_collapse_threshold": 0.20,
         "max_risk_per_trade": args.risk,
         "entry_rules_enabled": not args.no_entry_rules,
+        "mlp_threshold": args.mlp_threshold,
+        "finder_thresholds": FINDER_THRESHOLDS,
+        "max_signals_per_minute": MAX_SIGNALS_PER_MINUTE,
+        "finder_std_max": FINDER_STD_MAX,
+        "max_positions_per_sector": MAX_POSITIONS_PER_SECTOR,
+        "midday_block": True,
         "symbols": args.symbols or "all",
     }
     logger = DataLogger(params=run_params)
@@ -525,7 +653,7 @@ def main():
         trailing_sl_pct=args.trailing_sl_pct,
         trailing_min_pct=args.trailing_min_pct,
         trailing_ramp_pct=args.trailing_ramp_pct,
-        enable_trailing_sl=not args.no_trailing_sl,
+        enable_trailing_sl=args.trailing_sl,
         ratchet_mode=not args.no_ratchet,
         reentry_cooldown_minutes=args.reentry_cooldown,
         sl_time_decay_target=args.sl_time_decay_target,
@@ -554,25 +682,27 @@ def main():
     print(f"{'=' * 60}")
     print(f"Market Hours: 09:30-16:00 ET (15:30-22:00 MESZ)")
     print(f"Max Positions: {args.max_positions}")
+    print(f"Max Daily Trades: {args.max_daily_trades}")
     print(f"Risk/Trade: {args.risk*100:.1f}%")
-    print(f"Strategie: Finder Majority + MLP Gate")
-    if not args.no_trailing_sl:
-        print(f"Trailing SL: AN (graduell, schlaeft bis Kurs > Entry)"
-              f" | Start={args.trailing_sl_pct*100:.2f}%"
-              f" → Min={args.trailing_min_pct*100:.2f}%"
-              f" @ +{args.trailing_ramp_pct*100:.2f}% Profit)")
+    print(f"Strategie: Finder Majority + MLP Gate (Schwelle={args.mlp_threshold:.2f})")
+    print(f"Signal-Filter: Top-{MAX_SIGNALS_PER_MINUTE} Quality-Score + Floor={args.min_quality:.2f}")
+    print(f"R:R = {args.tp_pct*100:.2f}% / {args.sl_pct*100:.2f}% = 1:{args.tp_pct/args.sl_pct:.1f}")
+    print(f"Midday (12-14 ET): ERLAUBT mit Quality-Floor=0.55 + 3 Finder-Votes + 40% Position")
+    if args.trailing_sl:
+        print(f"Trailing SL: AN "
+              f"({args.trailing_sl_pct*100:.2f}% -> {args.trailing_min_pct*100:.2f}%)")
     else:
-        print(f"Trailing SL: AUS (nur fixer SL)")
+        print(f"Trailing SL: AUS (fixer SL + Ratchet)")
     if not args.no_ratchet:
-        print(f"Ratchet-Mode: AN – TP-Level wird zu SL-Boden (kein fester TP-Exit)")
+        print(f"Ratchet-Mode: AN – TP={args.tp_pct*100:.2f}% wird zu SL-Boden")
     else:
         print(f"Ratchet-Mode: AUS – klassischer TP-Exit")
-    print(f"Exit-Regeln: TP={args.tp_pct*100:.2f}% SL={args.sl_pct*100:.2f}%"
-          f" → {args.sl_time_decay_target*100:.2f}% (Time-Decay)"
-          f" | Time-Stop=30min | Cooldown={args.reentry_cooldown}min")
+    print(f"Time-Decay: {args.sl_time_decay_target*100:.2f}% "
+          f"(Grace={args.sl_time_decay_grace}min) | Cooldown={args.reentry_cooldown}min")
     print(f"Druecke Ctrl+C zum Beenden\n")
 
     iteration = 0
+    daily_trades = 0  # Nur fuer Logging/Safety-Net, kein kuenstliches Cap
     last_flush = datetime.now()
     positions_liquidated_today = False
 
@@ -583,7 +713,7 @@ def main():
         # Pre-Close-Liquidation: 15:00 ET (21:00 MESZ) ALLE Positionen verkaufen
         # Daten zeigen: Trades nach 15:00 ET haben negative EV (heute: 26 Trades, -0.11%)
         # Letzte 45 Min vor Close: 21 Trades, -2.26%, Win=48%
-        # Median-Haltedauer = 13 Min → Trades nach 15:30 schaffen keinen vollen Zyklus
+        # Median-Haltedauer = 13 Min -> Trades nach 15:30 schaffen keinen vollen Zyklus
         market_close_et = now.replace(hour=16, minute=0, second=0, microsecond=0)
         minutes_until_close = (market_close_et - now).total_seconds() / 60.0
         trading_deadline_et = now.replace(hour=15, minute=0, second=0, microsecond=0)
@@ -613,6 +743,7 @@ def main():
 
                 logger.end_of_day()
                 account_mgr.reset_daily()
+                daily_trades = 0
                 time.sleep(300)  # Alle 5 Min checken
                 continue
         else:
@@ -699,15 +830,26 @@ def main():
                         ensemble_score=score, ensemble_signal=signal,
                     )
 
-            if signals or signals_filtered:
-                filter_info = f" ({signals_filtered} gefiltert)" if signals_filtered else ""
-                print(f"  SIGNALE: {len(signals)}{filter_info}")
+            # 3. Quality-Ranking: Nur Top-N Signale pro Minute + Regime-spezifischer Quality-Floor
+            if signals:
+                regime_quality_floor = current_regime.get("min_quality_override", args.min_quality)
+                signals = filter_top_signals(signals, MAX_SIGNALS_PER_MINUTE, regime_quality_floor)
 
-            # 3. Finder-Scores aktualisieren (fuer Signal-Kollaps-Check)
+            # Immer Signal-Status anzeigen (auch bei 0)
+            filter_info = f" ({signals_filtered} gefiltert)" if signals_filtered else ""
+            if signals:
+                q_scores = [f"{sym}={compute_signal_quality(probs, score):.3f}"
+                           for sym, _, score, probs, _ in signals]
+                print(f"  SIGNALE: {len(signals)}{filter_info} (Top-{len(signals)} Quality)")
+                print(f"  Quality: {', '.join(q_scores)}")
+            else:
+                print(f"  SIGNALE: 0{filter_info}")
+
+            # 4. Finder-Scores aktualisieren (fuer Signal-Kollaps-Check)
             finder_scores = {sym: score for sym, _, score, _, _ in signals}
             account_mgr.update_finder_scores(finder_scores)
 
-            # 4. Exit-Checks
+            # 5. Exit-Checks
             exits = account_mgr.check_exits(current_prices)
             for exit_action in exits:
                 print(f"  EXIT: {exit_action.symbol} ({exit_action.reason}) "
@@ -718,7 +860,7 @@ def main():
                     account_mgr.submit_market_sell(exit_action.symbol, qty)
                 account_mgr.register_exit(exit_action)
 
-            # 5. Neue Trades eroeffnen
+            # 6. Neue Trades eroeffnen
             if not args.dry_run and trading_client:
                 account = trading_client.get_account()
                 equity = float(account.equity)
@@ -726,8 +868,27 @@ def main():
                 equity = 100_000.0  # Simuliertes Kapital fuer Dry-Run
 
             for sym, price, score, probs, regime in signals:
+                regime_name = regime.get("name", "unknown")
+
+                # --- Regime-Entry-Check: No-Trading-Zone (nur 15:00-16:00 ET) ---
+                if not regime.get("allow_entries", True):
+                    continue  # Keine Einstiege in dieser Marktphase (nur no_trading)
+
+                # --- Safety-Net: rein technische Notbremse (default 50, quasi nie erreicht) ---
+                if daily_trades >= args.max_daily_trades:
+                    continue
+
                 if not account_mgr.can_enter(sym):
                     continue
+
+                # --- Sektor-Konzentrations-Check ---
+                sector = SECTOR_MAP.get(sym, "other")
+                sector_count = sum(
+                    1 for s in account_mgr._positions
+                    if SECTOR_MAP.get(s, "other") == sector
+                )
+                if sector_count >= MAX_POSITIONS_PER_SECTOR:
+                    continue  # Zu viele Positionen im gleichen Sektor
 
                 # Pre-Close-Schutz: Kein Einstieg wenn Time-Stop nicht mehr in Marktzeit passt
                 regime_time_stop = regime.get("time_stop_min", 30)
@@ -745,13 +906,14 @@ def main():
                 tp_price = price * (1.0 + args.tp_pct)
                 sl_price = price * (1.0 - args.sl_pct)
 
-                # Regime-Info im Dry-Run sichtbar machen
+                # Quality-Score fuer Logging
+                quality = compute_signal_quality(probs, score)
                 regime_tag = f" [{regime['name']}]" if regime["name"] not in ("open_drive", "late_morning", "afternoon") else ""
 
                 if args.dry_run:
                     print(f"  [DRY-RUN] {sym}: BUY {qty} @ ${price:.2f} "
                           f"(TP=${tp_price:.2f} SL=${sl_price:.2f} "
-                          f"TS={regime_time_stop}min{regime_tag})")
+                          f"TS={regime_time_stop}min Q={quality:.3f}{regime_tag})")
                     account_mgr.register_entry(sym, price, qty,
                                                order_id=f"dry_{iteration}_{sym}",
                                                finder_score=score,
@@ -763,12 +925,18 @@ def main():
                     # ECHTEN Fill-Preis verwenden, nicht bar["close"]
                     entry_px = fill_price if fill_price > 0 else price
                     print(f"  [ORDER] {sym}: BUY {qty} @ ${entry_px:.2f}"
-                          f"{regime_tag}")
+                          f" Q={quality:.3f}{regime_tag}")
                     if order_id:
                         account_mgr.register_entry(sym, entry_px, qty,
                                                    order_id=order_id,
                                                    finder_score=score,
                                                    time_stop_minutes=regime_time_stop)
+                daily_trades += 1
+
+            # Safety-Net-Warnung (nur wenn das technische Limit erreicht wird)
+            if daily_trades == args.max_daily_trades:
+                print(f"  [SAFETY-NET] Technisches Tages-Limit erreicht ({args.max_daily_trades}) "
+                      f"- Notbremse greift")
 
             # 6. Periodisches Flushen (alle 30 Min)
             if (datetime.now() - last_flush).total_seconds() > 1800:
@@ -809,7 +977,7 @@ def main():
     logger.write_run_exit(exit_reason)
     summary = logger.get_summary()
     print(f"Signale: {summary['n_signals']} | Orders: {summary['n_orders']} | "
-          f"Positions: {summary['n_positions']}")
+          f"Positions: {summary['n_positions']} | Trades heute: {daily_trades}")
     print(f"Gespeichert in: {logger.run_dir}")
 
 

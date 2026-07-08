@@ -54,19 +54,19 @@ class AccountManager:
         trading_client,
         max_positions: int = 10,
         max_risk_per_trade: float = 0.005,
-        tp_pct: float = 0.0025,
-        sl_pct: float = 0.01,
+        tp_pct: float = 0.0035,
+        sl_pct: float = 0.0040,
         time_stop_minutes: int = 30,
         signal_collapse_threshold: float = 0.20,
         position_size_pct: float = 0.05,
-        trailing_sl_pct: float = 0.005,
-        trailing_min_pct: float = 0.002,
-        trailing_ramp_pct: float = 0.005,
+        trailing_sl_pct: float = 0.004,
+        trailing_min_pct: float = 0.0015,
+        trailing_ramp_pct: float = 0.004,
         enable_trailing_sl: bool = True,
         ratchet_mode: bool = True,
         reentry_cooldown_minutes: int = 5,
         sl_time_decay_target: float = 0.003,
-        sl_time_decay_grace: int = 10,
+        sl_time_decay_grace: int = 5,
         logger=None,
     ):
         self._client = trading_client
@@ -271,8 +271,14 @@ class AccountManager:
             time_sl = pos.entry_price * (1.0 - decay_sl_pct)
 
             # Effektiven Stop Loss berechnen (Maximum aller Schutz-Schichten)
-            # Trailing greift ERST wenn Kurs ueber Entry gestiegen ist
-            if self.enable_trailing_sl and pos.highest_price > pos.entry_price:
+            # Trailing greift ERST wenn Kurs mindestens trailing_sl_pct ueber Entry war.
+            # Verhindert Mikro-Wackler: Ohne diese Schwelle wuerde schon +0.01% den
+            # Trailing aktivieren und Trades nach 2 Min bei -0.2% killen.
+            trailing_active = (
+                self.enable_trailing_sl
+                and pos.highest_price >= pos.entry_price * (1.0 + self.trailing_sl_pct)
+            )
+            if trailing_active:
                 trail_distance = self._current_trail_distance(pos)
                 trailing_sl = pos.highest_price * (1.0 - trail_distance)
                 effective_sl = max(pos.sl_price, time_sl, pos.ratchet_floor, trailing_sl)
@@ -287,14 +293,21 @@ class AccountManager:
             elif not self.ratchet_mode and price >= pos.tp_price:
                 exits.append(ExitAction(sym, "take_profit", pos.entry_price, price, pnl))
 
-            # Trailing Stop Loss
+            # Trailing Stop Loss (erst aktiv wenn trailing-Schwelle erreicht wurde)
+            # BUGFIX (2026-07-07): Trailing Stop nur ueber Entry ausloesen.
+            # Vorher: Trailing konnte bei -0.2% ausloesen, weil die 1-Min-Bar
+            # ein Hoch ueber +0.4% hatte, aber der Close unter Entry lag.
+            # Jetzt: Faellt der Preis unter Entry, greift der normale SL.
             elif (self.enable_trailing_sl
-                  and pos.highest_price > pos.entry_price
-                  and price <= effective_sl):
+                  and pos.highest_price >= pos.entry_price * (1.0 + self.trailing_sl_pct)
+                  and price <= effective_sl
+                  and price >= pos.entry_price):  # Profit-Floor: kein Trailing-Exit unter Entry!
                 exits.append(ExitAction(sym, "trailing_stop", pos.entry_price, price, pnl))
 
-            # Stop Loss (fix, greift wenn noch kein Hoch ueber Entry erreicht wurde)
-            elif pos.sl_price < pos.entry_price and price <= effective_sl:
+            # Stop Loss (fix, greift wenn:
+            #   - Trailing nie aktiviert wurde, ODER
+            #   - Preis unter Entry gefallen ist nach Trailing-Aktivierung)
+            elif price <= effective_sl:
                 exits.append(ExitAction(sym, "stop_loss", pos.entry_price, price, pnl))
 
             # Time Stop
