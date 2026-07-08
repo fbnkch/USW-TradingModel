@@ -111,8 +111,8 @@ def parse_args():
                    help="Max. Risk pro Trade (default: 0.5%%)")
     p.add_argument("--tp_pct", type=float, default=0.005,
                    help="Take-Profit in %% (default: 0.5%%)")
-    p.add_argument("--sl_pct", type=float, default=0.0040,
-                   help="Stop-Loss in %% (default: 0.40%% -> R:R ~1:1.25)")
+    p.add_argument("--sl_pct", type=float, default=0.0060,
+                   help="Stop-Loss in %% (default: 0.60%% -> R:R ~1:0.83)")
     p.add_argument("--trailing_sl", action="store_true", default=False,
                    help="Trailing Stop Loss AKTIVIEREN (default: AUS)")
     p.add_argument("--no_ratchet", action="store_true",
@@ -143,6 +143,14 @@ def parse_args():
                    help="MLP-Gate-Schwelle (default: 0.85)")
     p.add_argument("--min_quality", type=float, default=MIN_QUALITY_SCORE,
                    help=f"Quality-Floor: Signale darunter werden ignoriert (default: {MIN_QUALITY_SCORE})")
+    p.add_argument("--grace_sl_pct", type=float, default=0.015,
+                   help="Grace Stufe 1: SL in %% (0-3 Min, default: 1.5%%)")
+    p.add_argument("--grace_sl_pct_t2", type=float, default=0.010,
+                   help="Grace Stufe 2: SL in %% (3-5 Min, default: 1.0%%)")
+    p.add_argument("--entry_grace_minutes", type=int, default=3,
+                   help="Grace Stufe 1: Dauer in Minuten (default: 3)")
+    p.add_argument("--entry_grace_t2_minutes", type=int, default=5,
+                   help="Grace Stufe 2: Ende in Minuten kumulativ (default: 5)")
     return p.parse_args()
 
 
@@ -612,6 +620,10 @@ def main():
         "finder_std_max": FINDER_STD_MAX,
         "max_positions_per_sector": MAX_POSITIONS_PER_SECTOR,
         "midday_block": True,
+        "grace_sl_pct": args.grace_sl_pct,
+        "grace_sl_pct_t2": args.grace_sl_pct_t2,
+        "entry_grace_minutes": args.entry_grace_minutes,
+        "entry_grace_t2_minutes": args.entry_grace_t2_minutes,
         "symbols": args.symbols or "all",
     }
     logger = DataLogger(params=run_params)
@@ -658,6 +670,10 @@ def main():
         reentry_cooldown_minutes=args.reentry_cooldown,
         sl_time_decay_target=args.sl_time_decay_target,
         sl_time_decay_grace=args.sl_time_decay_grace,
+        grace_sl_pct=args.grace_sl_pct,
+        grace_sl_pct_t2=args.grace_sl_pct_t2,
+        entry_grace_minutes=args.entry_grace_minutes,
+        entry_grace_t2_minutes=args.entry_grace_t2_minutes,
         logger=logger,
     )
 
@@ -688,6 +704,9 @@ def main():
     print(f"Signal-Filter: Top-{MAX_SIGNALS_PER_MINUTE} Quality-Score + Floor={args.min_quality:.2f}")
     print(f"R:R = {args.tp_pct*100:.2f}% / {args.sl_pct*100:.2f}% = 1:{args.tp_pct/args.sl_pct:.1f}")
     print(f"Midday (12-14 ET): ERLAUBT mit Quality-Floor=0.55 + 3 Finder-Votes + 40% Position")
+    print(f"Entry-Grace: 0-{args.entry_grace_minutes}Min SL={args.grace_sl_pct*100:.2f}% "
+          f"> {args.entry_grace_minutes}-{args.entry_grace_t2_minutes}Min SL={args.grace_sl_pct_t2*100:.2f}% "
+          f"> ab {args.entry_grace_t2_minutes}Min SL={args.sl_pct*100:.2f}%")
     if args.trailing_sl:
         print(f"Trailing SL: AN "
               f"({args.trailing_sl_pct*100:.2f}% -> {args.trailing_min_pct*100:.2f}%)")

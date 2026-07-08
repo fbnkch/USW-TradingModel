@@ -55,7 +55,7 @@ class AccountManager:
         max_positions: int = 10,
         max_risk_per_trade: float = 0.005,
         tp_pct: float = 0.0035,
-        sl_pct: float = 0.0040,
+        sl_pct: float = 0.0060,
         time_stop_minutes: int = 30,
         signal_collapse_threshold: float = 0.20,
         position_size_pct: float = 0.05,
@@ -67,6 +67,10 @@ class AccountManager:
         reentry_cooldown_minutes: int = 5,
         sl_time_decay_target: float = 0.003,
         sl_time_decay_grace: int = 5,
+        grace_sl_pct: float = 0.015,
+        grace_sl_pct_t2: float = 0.010,
+        entry_grace_minutes: int = 3,
+        entry_grace_t2_minutes: int = 5,
         logger=None,
     ):
         self._client = trading_client
@@ -86,6 +90,10 @@ class AccountManager:
         self.reentry_cooldown = timedelta(minutes=reentry_cooldown_minutes)
         self.sl_time_decay_target = sl_time_decay_target
         self.sl_time_decay_grace = sl_time_decay_grace
+        self.grace_sl_pct = grace_sl_pct
+        self.grace_sl_pct_t2 = grace_sl_pct_t2
+        self.entry_grace_minutes = entry_grace_minutes
+        self.entry_grace_t2_minutes = entry_grace_t2_minutes
         self.logger = logger
 
         self._positions: dict[str, Position] = {}
@@ -260,6 +268,22 @@ class AccountManager:
             # auf sl_time_decay_target bei Time-Stop.
             # Verhindert Time-Stop-Todesfaelle, ohne fruehe Trades zu ersticken.
             age_minutes = age.total_seconds() / 60.0
+
+            # --- Entry-Grace-Period: Gestufter SL in den ersten Minuten ---
+            # Daten vom 08.07.: 11 Trades in 0-5 Min, alle Verluste, -$247.
+            # Der normale SL (0.60%) gibt bei 1-Min-Bars + Market-Slippage nicht
+            # genug Atemluft. Gestufte Grace: nur echte Abstuerze brechen frueh ab.
+            #
+            # Stufe 1 (0-3 Min): SL 1.50% — nur echte Crashs (>1.5% unter Entry)
+            # Stufe 2 (3-5 Min): SL 1.00% — atmen, aber nicht unbegrenzt
+            # Normal  (5+  Min): SL 0.60% — normale Disziplin
+            if age_minutes < self.entry_grace_minutes:
+                base_sl = pos.entry_price * (1.0 - self.grace_sl_pct)       # 1.50%
+            elif age_minutes < self.entry_grace_t2_minutes:
+                base_sl = pos.entry_price * (1.0 - self.grace_sl_pct_t2)    # 1.00%
+            else:
+                base_sl = pos.sl_price                                       # 0.60%
+
             grace = float(self.sl_time_decay_grace)
             pos_time_stop = float(getattr(pos, 'time_stop_minutes', self.time_stop_minutes))
             remaining = pos_time_stop - grace
@@ -281,9 +305,9 @@ class AccountManager:
             if trailing_active:
                 trail_distance = self._current_trail_distance(pos)
                 trailing_sl = pos.highest_price * (1.0 - trail_distance)
-                effective_sl = max(pos.sl_price, time_sl, pos.ratchet_floor, trailing_sl)
+                effective_sl = max(base_sl, time_sl, pos.ratchet_floor, trailing_sl)
             else:
-                effective_sl = max(pos.sl_price, time_sl, pos.ratchet_floor)
+                effective_sl = max(base_sl, time_sl, pos.ratchet_floor)
 
             # Ratchet-Mode Exit (Kurs unter Ratchet-Floor gefallen)
             if self.ratchet_mode and pos.ratchet_triggered and price <= pos.ratchet_floor:
