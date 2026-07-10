@@ -242,6 +242,40 @@ class DataLogger:
         self.flush_orders()
         print(f"[DataLogger] Puffer geleert -> {self.run_dir}")
 
+    def rollover_if_new_day(self):
+        """Mitternachts-Rollover: Neuer Run-Ordner wenn der Tag wechselt.
+
+        Wird nach Marktschluss im Sleep-Loop aufgerufen. Erkennt ob seit
+        dem Start des Runs Mitternacht vergangen ist und legt einen
+        frischen Run-Ordner fuer den neuen Tag an.
+
+        Returns:
+            True wenn ein Rollover stattfand, sonst False.
+        """
+        now = datetime.now()
+        if now.date() <= self._start_time.date():
+            return False
+
+        # Alter Run: exit_info schreiben
+        self.write_run_exit("midnight_rollover")
+        self.flush_bars()
+        self.flush_signals()
+        self.flush_orders()
+
+        # Neuer Run
+        today = now.strftime("%Y-%m-%d")
+        existing = sorted(self.base_dir.glob(f"{today}_run-*"))
+        run_num = len(existing) + 1
+        self.run_name = f"{today}_run-{run_num:03d}"
+        self.run_dir = self.base_dir / self.run_name
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self._start_time = now
+
+        # Run-Info fuer neuen Tag schreiben
+        self._write_run_info()
+        print(f"[DataLogger] Mitternachts-Rollover -> {self.run_name}")
+        return True
+
     # ---- Summary -------------------------------------------------------
 
     def get_summary(self) -> dict:

@@ -70,7 +70,7 @@ FINDER_THRESHOLDS = {"lstm": 0.32, "gru": 0.334, "cnn": 0.314, "lightgbm": 0.355
 FILTER_THRESHOLD = 0.85       # MLP Gate: hoehere Huerde (0.75 -> 0.85)
 MAX_SIGNALS_PER_MINUTE = 2     # Top-N Ranking statt Threshold-Filter
 FINDER_STD_MAX = 0.08          # Max. StdDev der 4 Finder-Probs (strenger: 0.10 -> 0.08)
-MIN_QUALITY_SCORE = 0.40       # Default Quality-Floor (pro Regime ueberschreibbar)
+MIN_QUALITY_SCORE = 0.35       # Default Quality-Floor (pro Regime ueberschreibbar)
 MAX_DAILY_TRADES = 50          # Reines Safety-Net (kein kuenstliches Cap)
 
 # Finder-Gewichte (normalisiert aus F1)
@@ -481,10 +481,16 @@ def get_market_regime(now_et) -> dict:
 
     if morning_start <= t < late_morning:
         return {"name": "open_drive", "finder_votes_needed": 2, "size_mult": 1.0,
-                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 2}
+                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 2,
+                "min_quality_override": 0.40}  # Bewaehrt: 40% WR, fast break-even
     elif late_morning <= t < midday_start:
+        # Late Morning: WR=17% am 09.07. (12 Trades, -$154).
+        # Quality-Floor auf 0.50 — nur Signale mit hoher MLP-Confidence
+        # UND gutem Finder-Agreement ueberleben. Kein Sektor-Filter,
+        # sondern Regime-basierte Qualitaets-Huerde (wie Midday).
         return {"name": "late_morning", "finder_votes_needed": 2, "size_mult": 0.8,
-                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 3}
+                "time_stop_min": 30, "allow_entries": True, "cooldown_min": 3,
+                "min_quality_override": 0.50}
     elif midday_start <= t < afternoon_start:
         # MIDDAY: Einstiege erlaubt, aber DEUTLICH strenger.
         # Daten: 27-37% WR, negative avg PnL (-0.15%) = Fake-Breakout-Zone.
@@ -493,7 +499,7 @@ def get_market_regime(now_et) -> dict:
         # Nur wirklich klare Signale ueberleben diesen Filter.
         return {"name": "midday", "finder_votes_needed": 3, "size_mult": 0.4,
                 "time_stop_min": 20, "allow_entries": True, "cooldown_min": 5,
-                "min_quality_override": 0.55}
+                "min_quality_override": 0.48}
     elif afternoon_start <= t < close_start:
         return {"name": "afternoon", "finder_votes_needed": 2, "size_mult": 0.8,
                 "time_stop_min": 25, "allow_entries": True, "cooldown_min": 3}
@@ -703,7 +709,7 @@ def main():
     print(f"Strategie: Finder Majority + MLP Gate (Schwelle={args.mlp_threshold:.2f})")
     print(f"Signal-Filter: Top-{MAX_SIGNALS_PER_MINUTE} Quality-Score + Floor={args.min_quality:.2f}")
     print(f"R:R = {args.tp_pct*100:.2f}% / {args.sl_pct*100:.2f}% = 1:{args.tp_pct/args.sl_pct:.1f}")
-    print(f"Midday (12-14 ET): ERLAUBT mit Quality-Floor=0.55 + 3 Finder-Votes + 40% Position")
+    print(f"Midday (12-14 ET): ERLAUBT mit Quality-Floor=0.48 + 3 Finder-Votes + 40% Position")
     print(f"Entry-Grace: 0-{args.entry_grace_minutes}Min SL={args.grace_sl_pct*100:.2f}% "
           f"> {args.entry_grace_minutes}-{args.entry_grace_t2_minutes}Min SL={args.grace_sl_pct_t2*100:.2f}% "
           f"> ab {args.entry_grace_t2_minutes}Min SL={args.sl_pct*100:.2f}%")
@@ -761,6 +767,7 @@ def main():
                     positions_liquidated_today = True
 
                 logger.end_of_day()
+                logger.rollover_if_new_day()  # Mitternachts-Rollover
                 account_mgr.reset_daily()
                 daily_trades = 0
                 time.sleep(300)  # Alle 5 Min checken
@@ -871,13 +878,22 @@ def main():
             # 5. Exit-Checks
             exits = account_mgr.check_exits(current_prices)
             for exit_action in exits:
-                print(f"  EXIT: {exit_action.symbol} ({exit_action.reason}) "
-                      f"PnL={exit_action.pnl_pct:+.3%}")
-                if not args.dry_run:
-                    pos = account_mgr._positions.get(exit_action.symbol)
-                    qty = pos.qty if pos else 1
-                    account_mgr.submit_market_sell(exit_action.symbol, qty)
-                account_mgr.register_exit(exit_action)
+                if exit_action.partial_qty > 0:
+                    # Teilgewinnmitnahme: Nur einen Teil der Position verkaufen
+                    print(f"  EXIT: {exit_action.symbol} (PARTIAL {exit_action.partial_qty}sh) "
+                          f"PnL={exit_action.pnl_pct:+.3%}")
+                    if not args.dry_run:
+                        account_mgr.submit_market_sell(exit_action.symbol, exit_action.partial_qty)
+                    account_mgr.register_exit(exit_action)
+                else:
+                    # Voller Exit
+                    print(f"  EXIT: {exit_action.symbol} ({exit_action.reason}) "
+                          f"PnL={exit_action.pnl_pct:+.3%}")
+                    if not args.dry_run:
+                        pos = account_mgr._positions.get(exit_action.symbol)
+                        qty = pos.qty if pos else 1
+                        account_mgr.submit_market_sell(exit_action.symbol, qty)
+                    account_mgr.register_exit(exit_action)
 
             # 6. Neue Trades eroeffnen
             if not args.dry_run and trading_client:
