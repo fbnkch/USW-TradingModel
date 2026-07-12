@@ -113,8 +113,8 @@ def parse_args():
                    help="Take-Profit in %% (default: 0.5%%)")
     p.add_argument("--sl_pct", type=float, default=0.0060,
                    help="Stop-Loss in %% (default: 0.60%% -> R:R ~1:0.83)")
-    p.add_argument("--trailing_sl", action="store_true", default=False,
-                   help="Trailing Stop Loss AKTIVIEREN (default: AUS)")
+    p.add_argument("--no_atr_trail", action="store_true", default=False,
+                   help="ATR-Trailing-Stop DEAKTIVIEREN (nur Grace-SL + Time-Decay)")
     p.add_argument("--no_ratchet", action="store_true",
                    help="Ratchet-Mode deaktivieren (klassischer TP-Exit)")
     p.add_argument("--reentry_cooldown", type=int, default=15,
@@ -175,13 +175,19 @@ def load_alpaca_clients():
 
 
 def load_symbols(max_symbols: int = None) -> list[str]:
-    """Lädt NASDAQ-100 Symbolliste."""
+    """Laedt NASDAQ-100 Symbolliste + QQQ fuer Markt-Kontext."""
     sym_path = _PROJECT_ROOT / "data" / "nasdaq100_symbols.csv"
     df = pd.read_csv(sym_path)
     symbols = df["symbol"].tolist() if "symbol" in df.columns else df.iloc[:, 0].tolist()
     if max_symbols:
         symbols = symbols[:max_symbols]
+    # QQQ als Markt-Kontext (wird in Features berechnet, aber nicht gehandelt)
+    if "QQQ" not in symbols:
+        symbols.append("QQQ")
     return symbols
+
+# Symbole die NUR fuer Markt-Kontext dienen (keine Trading-Signale)
+CONTEXT_SYMBOLS = {"QQQ"}
 
 
 def download_warmup_bars(data_client, symbols: list[str], days: int = 5) -> dict[str, pd.DataFrame]:
@@ -468,7 +474,7 @@ def get_market_regime(now_et) -> dict:
     Returns dict mit Multiplikatoren fuer Schwelle, Positionsgroesse, Time-Stop.
     """
     if now_et is None:
-        return {"name": "unknown", "finder_votes_needed": 2, "size_mult": 1.0,
+        return {"name": "unknown", "finder_votes_needed": 3, "size_mult": 1.0,
                 "time_stop_min": 30, "allow_entries": True, "cooldown_min": 5}
 
     t = now_et.time()
@@ -480,7 +486,7 @@ def get_market_regime(now_et) -> dict:
     market_close = pd.to_datetime("16:00").time()
 
     if morning_start <= t < late_morning:
-        return {"name": "open_drive", "finder_votes_needed": 2, "size_mult": 1.0,
+        return {"name": "open_drive", "finder_votes_needed": 3, "size_mult": 1.0,
                 "time_stop_min": 30, "allow_entries": True, "cooldown_min": 2,
                 "min_quality_override": 0.40}  # Bewaehrt: 40% WR, fast break-even
     elif late_morning <= t < midday_start:
@@ -488,7 +494,7 @@ def get_market_regime(now_et) -> dict:
         # Quality-Floor auf 0.50 — nur Signale mit hoher MLP-Confidence
         # UND gutem Finder-Agreement ueberleben. Kein Sektor-Filter,
         # sondern Regime-basierte Qualitaets-Huerde (wie Midday).
-        return {"name": "late_morning", "finder_votes_needed": 2, "size_mult": 0.8,
+        return {"name": "late_morning", "finder_votes_needed": 3, "size_mult": 0.8,
                 "time_stop_min": 30, "allow_entries": True, "cooldown_min": 3,
                 "min_quality_override": 0.50}
     elif midday_start <= t < afternoon_start:
@@ -501,7 +507,7 @@ def get_market_regime(now_et) -> dict:
                 "time_stop_min": 20, "allow_entries": True, "cooldown_min": 5,
                 "min_quality_override": 0.48}
     elif afternoon_start <= t < close_start:
-        return {"name": "afternoon", "finder_votes_needed": 2, "size_mult": 0.8,
+        return {"name": "afternoon", "finder_votes_needed": 3, "size_mult": 0.8,
                 "time_stop_min": 25, "allow_entries": True, "cooldown_min": 3}
     else:
         # After 15:00 ET: KEIN Trading (Liquidation only — Daten: negative EV)
@@ -516,12 +522,12 @@ def check_entry_rules(
     regime: dict,
     enabled: bool = True,
 ) -> tuple[bool, str]:
-    """Regime-basierte Entry-Prüfung (E3–E5).
+    """Regime-basierte Entry-Pruefung (E3–E6).
 
     E3: Momentum positiv – return_1m > 0
     E4: Kurz-Trend positiv – Slope_close_1 > 0
-    E5: Regime-abhaengige Finder-Votes-Schwelle
-         (midday=3 votes needed, sonst=2)
+    E5: Regime-abhaengige Finder-Votes-Schwelle (default: 3 von 4)
+    E6: Volumen-Bestaetigung – volume_norm > 0 (ueber 20er-Durchschnitt)
 
     Returns:
         (passed, reason)
@@ -539,10 +545,20 @@ def check_entry_rules(
         if features[fidx["Slope_close_1"]] <= 0:
             return False, "E4: Slope_close_1 <= 0"
 
-    # E5: Regime-abhaengige Signal-Huerde
-    votes_needed = regime.get("finder_votes_needed", 2)
+    # E5: Regime-abhaengige Signal-Huerde (default: 3 Finder-Votes)
+    # Research: Bei 2/4 Votes ist die Precision ~50% (Zufall).
+    # 3/4 Votes eliminiert die knappen Fehlsignale wo nur 2 Finder
+    # knapp ueber Threshold liegen.
+    votes_needed = regime.get("finder_votes_needed", 3)
     if finder_votes < votes_needed:
         return False, f"E5: finder_votes={finder_votes} < {votes_needed} (regime={regime['name']})"
+
+    # E6: Volumen-Bestaetigung
+    # Research: Breakouts ohne ueberdurchschnittliches Volumen sind in
+    # >60% der Faelle Fake-Breakouts (insb. bei Mid-/Small-Cap NASDAQ).
+    if fidx.get("volume_norm") is not None:
+        if features[fidx["volume_norm"]] <= 0:
+            return False, "E6: volume_norm <= 0 (Volumen unter Durchschnitt)"
 
     return True, f"passed (regime={regime['name']})"
 
@@ -608,10 +624,7 @@ def main():
         "sl_pct": args.sl_pct,
         "rr_ratio": args.tp_pct / args.sl_pct if args.sl_pct > 0 else 0,
         "position_size_pct": args.position_size_pct,
-        "trailing_sl": args.trailing_sl,
-        "trailing_sl_pct": args.trailing_sl_pct,
-        "trailing_min_pct": args.trailing_min_pct,
-        "trailing_ramp_pct": args.trailing_ramp_pct,
+        "atr_trail": not args.no_atr_trail,
         "ratchet": not args.no_ratchet,
         "reentry_cooldown_minutes": args.reentry_cooldown,
         "sl_time_decay_target": args.sl_time_decay_target,
@@ -660,7 +673,7 @@ def main():
     models = load_ensemble_models(len(features_list), device)
     print("  5 Modelle geladen.")
 
-    # Account-Manager
+    # Account-Manager (ATR-Trailing-Stop nach Zarattini et al. 2024)
     account_mgr = AccountManager(
         trading_client=trading_client,
         max_positions=args.max_positions,
@@ -668,11 +681,7 @@ def main():
         tp_pct=args.tp_pct,
         sl_pct=args.sl_pct,
         position_size_pct=args.position_size_pct,
-        trailing_sl_pct=args.trailing_sl_pct,
-        trailing_min_pct=args.trailing_min_pct,
-        trailing_ramp_pct=args.trailing_ramp_pct,
-        enable_trailing_sl=args.trailing_sl,
-        ratchet_mode=not args.no_ratchet,
+        enable_trailing_sl=not args.no_atr_trail,
         reentry_cooldown_minutes=args.reentry_cooldown,
         sl_time_decay_target=args.sl_time_decay_target,
         sl_time_decay_grace=args.sl_time_decay_grace,
@@ -680,6 +689,9 @@ def main():
         grace_sl_pct_t2=args.grace_sl_pct_t2,
         entry_grace_minutes=args.entry_grace_minutes,
         entry_grace_t2_minutes=args.entry_grace_t2_minutes,
+        atr_trail_start_mult=2.5,
+        atr_trail_min_mult=1.2,
+        atr_trail_ramp_pct=0.015,
         logger=logger,
     )
 
@@ -708,26 +720,26 @@ def main():
     print(f"Risk/Trade: {args.risk*100:.1f}%")
     print(f"Strategie: Finder Majority + MLP Gate (Schwelle={args.mlp_threshold:.2f})")
     print(f"Signal-Filter: Top-{MAX_SIGNALS_PER_MINUTE} Quality-Score + Floor={args.min_quality:.2f}")
+    print(f"Entry-Rules: E3(Momentum) E4(Trend) E5(3/4 Finder-Votes) E6(Volumen) + Markt(QQQ) + Streak")
     print(f"R:R = {args.tp_pct*100:.2f}% / {args.sl_pct*100:.2f}% = 1:{args.tp_pct/args.sl_pct:.1f}")
-    print(f"Midday (12-14 ET): ERLAUBT mit Quality-Floor=0.48 + 3 Finder-Votes + 40% Position")
+    print(f"Late Morning: Quality-Floor=0.50 | Midday: QF=0.48 + 40% Position")
     print(f"Entry-Grace: 0-{args.entry_grace_minutes}Min SL={args.grace_sl_pct*100:.2f}% "
           f"> {args.entry_grace_minutes}-{args.entry_grace_t2_minutes}Min SL={args.grace_sl_pct_t2*100:.2f}% "
           f"> ab {args.entry_grace_t2_minutes}Min SL={args.sl_pct*100:.2f}%")
-    if args.trailing_sl:
-        print(f"Trailing SL: AN "
-              f"({args.trailing_sl_pct*100:.2f}% -> {args.trailing_min_pct*100:.2f}%)")
+    if not args.no_atr_trail:
+        print(f"Trailing SL: ATR-basiert (2.5x->1.2x ATR, Zarattini et al. 2024)")
+        print(f"  ATR-Trail: startet weit (2.5xATR), verengt auf 1.2xATR bei +1.5% Profit")
+        print(f"  VWAP-Floor: Session-VWAP als zusaetzlicher Boden (Paper: 'higher of Band or VWAP')")
+        print(f"  KEIN fixer TP/Ratchet — ATR-Stop sichert Gewinne dynamisch")
     else:
-        print(f"Trailing SL: AUS (fixer SL + Ratchet)")
-    if not args.no_ratchet:
-        print(f"Ratchet-Mode: AN – TP={args.tp_pct*100:.2f}% wird zu SL-Boden")
-    else:
-        print(f"Ratchet-Mode: AUS – klassischer TP-Exit")
+        print(f"Trailing SL: AUS (nur Grace-SL + Time-Decay + Breakeven)")
     print(f"Time-Decay: {args.sl_time_decay_target*100:.2f}% "
           f"(Grace={args.sl_time_decay_grace}min) | Cooldown={args.reentry_cooldown}min")
     print(f"Druecke Ctrl+C zum Beenden\n")
 
     iteration = 0
     daily_trades = 0  # Nur fuer Logging/Safety-Net, kein kuenstliches Cap
+    signal_streak_tracker: dict[str, int] = {}  # Symbol -> letzte Signal-Iteration (Streak-Filter)
     last_flush = datetime.now()
     positions_liquidated_today = False
 
@@ -875,18 +887,27 @@ def main():
             finder_scores = {sym: score for sym, _, score, _, _ in signals}
             account_mgr.update_finder_scores(finder_scores)
 
-            # 5. Exit-Checks
-            exits = account_mgr.check_exits(current_prices)
+            # 5. ATR + VWAP pro Symbol sammeln (fuer dynamischen Trailing-Stop)
+            atr_values = {}
+            vwap_values = {}
+            for sym in engine.engines:
+                try:
+                    atr_values[sym] = engine.engines[sym].get_atr_pct(14)
+                    vwap_values[sym] = engine.engines[sym].get_vwap()
+                except Exception:
+                    atr_values[sym] = 0.008
+                    vwap_values[sym] = 0.0
+
+            # 6. Exit-Checks (mit ATR + VWAP)
+            exits = account_mgr.check_exits(current_prices, atr_values, vwap_values)
             for exit_action in exits:
                 if exit_action.partial_qty > 0:
-                    # Teilgewinnmitnahme: Nur einen Teil der Position verkaufen
                     print(f"  EXIT: {exit_action.symbol} (PARTIAL {exit_action.partial_qty}sh) "
                           f"PnL={exit_action.pnl_pct:+.3%}")
                     if not args.dry_run:
                         account_mgr.submit_market_sell(exit_action.symbol, exit_action.partial_qty)
                     account_mgr.register_exit(exit_action)
                 else:
-                    # Voller Exit
                     print(f"  EXIT: {exit_action.symbol} ({exit_action.reason}) "
                           f"PnL={exit_action.pnl_pct:+.3%}")
                     if not args.dry_run:
@@ -895,15 +916,42 @@ def main():
                         account_mgr.submit_market_sell(exit_action.symbol, qty)
                     account_mgr.register_exit(exit_action)
 
-            # 6. Neue Trades eroeffnen
+            # 7. Markt-Kontext: QQQ-Richtung pruefen
+            market_falling = False
+            if "QQQ" in features_map:
+                qqq_return = features_map["QQQ"][feature_index.get("return_1m", 0)] if "return_1m" in feature_index else 0
+                market_falling = qqq_return <= -0.0002  # QQQ faellt >0.02% in 1 Min
+                if market_falling:
+                    print(f"  [MARKT] QQQ faellt ({qqq_return:+.4f}) — Keine Long-Einstiege")
+
+            # 8. Neue Trades eroeffnen
             if not args.dry_run and trading_client:
                 account = trading_client.get_account()
                 equity = float(account.equity)
             else:
                 equity = 100_000.0  # Simuliertes Kapital fuer Dry-Run
 
+            entry_iteration = 0
             for sym, price, score, probs, regime in signals:
+                entry_iteration += 1
                 regime_name = regime.get("name", "unknown")
+
+                # --- Kontext-Symbole ueberspringen (QQQ etc.) ---
+                if sym in CONTEXT_SYMBOLS:
+                    continue
+
+                # --- Markt-Kontext-Filter: Keine Longs bei fallendem QQQ ---
+                if market_falling:
+                    continue
+
+                # --- Signal-Streak-Filter: Kein Nachjagen ---
+                # Wenn das gleiche Symbol in den letzten 3 Iterationen (~3 Min)
+                # schon ein Signal hatte, wurde es bereits bewertet. Erneute
+                # Signale sind meist "Chasing" eines schon gelaufenen Breakouts.
+                last_signal_iter = signal_streak_tracker.get(sym, -999)
+                if iteration - last_signal_iter <= 3:
+                    continue
+                signal_streak_tracker[sym] = iteration
 
                 # --- Regime-Entry-Check: No-Trading-Zone (nur 15:00-16:00 ET) ---
                 if not regime.get("allow_entries", True):

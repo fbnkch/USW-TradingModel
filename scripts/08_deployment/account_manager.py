@@ -29,13 +29,10 @@ class Position:
     tp_price: float
     sl_price: float               # initialer Stop Loss (absolutes Minimum)
     highest_price: float = 0.0    # hoechster erreichte Preis seit Entry (fuer Trailing SL)
-    ratchet_triggered: bool = False  # True wenn TP-Level einmal erreicht wurde
-    ratchet_floor: float = 0.0    # neue SL-Unterkante nach Ratchet (>= TP-Level)
-    ratchet_level: int = 0        # 0=entry, 1=TP(+0.5%), 2=+1.0%, 3=+1.5%, 4=+2.0%
-    breakeven_triggered: bool = False  # True wenn +0.25% erreicht -> SL auf Entry
-    breakeven_price: float = 0.0  # SL-Floor = Entry-Preis (nach Breakeven-Trigger)
-    partial_exit_done: bool = False  # True nach Teilgewinnmitnahme bei TP
-    time_stop_minutes: int = 30   # individueller Time-Stop (Regime-abhaengig)
+    breakeven_triggered: bool = False
+    breakeven_price: float = 0.0
+    vwap_at_entry: float = 0.0    # Session-VWAP zum Entry-Zeitpunkt
+    time_stop_minutes: int = 30
     order_id: str = ""
     current_finder_score: float = 0.0
 
@@ -59,16 +56,12 @@ class AccountManager:
         trading_client,
         max_positions: int = 10,
         max_risk_per_trade: float = 0.005,
-        tp_pct: float = 0.0035,
+        tp_pct: float = 0.005,
         sl_pct: float = 0.0060,
         time_stop_minutes: int = 30,
         signal_collapse_threshold: float = 0.20,
         position_size_pct: float = 0.05,
-        trailing_sl_pct: float = 0.004,
-        trailing_min_pct: float = 0.0015,
-        trailing_ramp_pct: float = 0.004,
         enable_trailing_sl: bool = True,
-        ratchet_mode: bool = True,
         reentry_cooldown_minutes: int = 5,
         sl_time_decay_target: float = 0.003,
         sl_time_decay_grace: int = 5,
@@ -76,6 +69,9 @@ class AccountManager:
         grace_sl_pct_t2: float = 0.010,
         entry_grace_minutes: int = 3,
         entry_grace_t2_minutes: int = 5,
+        atr_trail_start_mult: float = 2.5,
+        atr_trail_min_mult: float = 1.2,
+        atr_trail_ramp_pct: float = 0.015,
         logger=None,
     ):
         self._client = trading_client
@@ -87,11 +83,7 @@ class AccountManager:
         self.time_stop_minutes = time_stop_minutes
         self.signal_collapse_threshold = signal_collapse_threshold
         self.position_size_pct = position_size_pct
-        self.trailing_sl_pct = trailing_sl_pct
-        self.trailing_min_pct = trailing_min_pct
-        self.trailing_ramp_pct = trailing_ramp_pct
         self.enable_trailing_sl = enable_trailing_sl
-        self.ratchet_mode = ratchet_mode
         self.reentry_cooldown = timedelta(minutes=reentry_cooldown_minutes)
         self.sl_time_decay_target = sl_time_decay_target
         self.sl_time_decay_grace = sl_time_decay_grace
@@ -99,6 +91,10 @@ class AccountManager:
         self.grace_sl_pct_t2 = grace_sl_pct_t2
         self.entry_grace_minutes = entry_grace_minutes
         self.entry_grace_t2_minutes = entry_grace_t2_minutes
+        # ATR-basierter Trailing Stop (Zarattini et al. 2024)
+        self.atr_trail_start_mult = atr_trail_start_mult
+        self.atr_trail_min_mult = atr_trail_min_mult
+        self.atr_trail_ramp_pct = atr_trail_ramp_pct
         self.logger = logger
 
         self._positions: dict[str, Position] = {}
@@ -205,59 +201,65 @@ class AccountManager:
             if sym in self._positions:
                 self._positions[sym].current_finder_score = score
 
-    def _current_trail_distance(self, pos: Position) -> float:
-        """Berechnet den Trail-Abstand linear basierend auf dem maximal erreichten Profit.
+    def _current_trail_distance_pct(self, pos: Position, atr: float) -> float:
+        """ATR-basierter Trailing-Stop-Abstand (Zarattini et al. 2024).
 
-        Je weiter der Kurs ueber Entry gestiegen ist, desto enger wird der Trail:
-          - Bei Entry (Profit=0):    Trail = trailing_sl_pct  (z.B. 0.15%)
-          - Bei voller Rampe:        Trail = trailing_min_pct (z.B. 0.05%)
+        Research: Statt fixer Prozentwerte wird der Trail-Abstand aus der
+        aktuellen Volatilitaet (ATR) abgeleitet — passt sich automatisch
+        an jedes Symbol an.
+
+        Je weiter der Kurs ueber Entry gestiegen ist, desto enger der Trail:
+          - Bei Entry (Profit=0):     Trail = atr_trail_start_mult * ATR
+          - Bei voller Rampe:         Trail = atr_trail_min_mult * ATR
+
+        Bsp. MU  (ATR~1.5%): Trail startet bei 3.75%, minimum 1.8%
+        Bsp. LCID (ATR~0.3%): Trail startet bei 0.75%, minimum 0.36%
 
         Der Trail-Abstand schrumpft linear mit dem highest_price.
-        Da highest_price nur steigt, kann der Trail NIE wieder weiter werden.
         """
+        if atr <= 0:
+            return 0.008
+
         profit_at_peak = (pos.highest_price - pos.entry_price) / pos.entry_price
-
         if profit_at_peak <= 0:
-            return self.trailing_sl_pct
+            return self.atr_trail_start_mult * atr
 
-        # Lineare Interpolation: 0% Profit → trailing_sl_pct, ramp_pct Profit → trailing_min_pct
-        ramp = min(1.0, profit_at_peak / self.trailing_ramp_pct)
-        trail = self.trailing_sl_pct + (self.trailing_min_pct - self.trailing_sl_pct) * ramp
+        ramp = min(1.0, profit_at_peak / self.atr_trail_ramp_pct)
+        mult = self.atr_trail_start_mult + (self.atr_trail_min_mult - self.atr_trail_start_mult) * ramp
+        return max(self.atr_trail_min_mult * atr, mult * atr)
 
-        return max(self.trailing_min_pct, trail)
+    def check_exits(
+        self,
+        current_prices: dict[str, float],
+        atr_values: dict[str, float] | None = None,
+        vwap_values: dict[str, float] | None = None,
+    ) -> list[ExitAction]:
+        """Prueft alle offenen Positionen auf Exit-Signale.
 
-    def check_exits(self, current_prices: dict[str, float]) -> list[ExitAction]:
-        """Prueft alle offenen Positionen auf TP/SL/Time-Stop/Signal-Kollaps.
+        STATE-OF-THE-ART EXIT-SYSTEM (Zarattini, Aziz & Barbon 2024):
 
-        VIER-Schicht-Schutzsystem + Multi-Level-Ratchet + Teilgewinnmitnahme:
+        1. Grace-SL (0-5 Min):        1.5% -> 1.0% Crash-Schutz
+        2. ATR-Trailing-Stop:          Dynamischer Stop basierend auf 14er-ATR.
+           Startet bei 2.5xATR, zieht sich auf 1.2xATR zusammen.
+           KEINE fixen TP-Level - der ATR-Stop laesst Gewinner laufen.
+        3. VWAP-Floor:                 Session-VWAP als zusaetzlicher Boden.
+           "Exit when price falls below the higher of Band or VWAP" (Paper)
+        4. Time-Decay SL:              Zieht sich linear mit der Zeit zusammen
+        5. Breakeven-Stop (konservativ): Nur nach 10+ Min, nur bei +0.4%
 
-        1. Fixer SL (sl_pct):            Absoluter Boden bei Entry (-0.6%)
-        2. Time-Decay SL:                Zieht sich mit der Zeit zusammen
-        3. Trailing Stop (preisbasiert): Wandert mit steigendem Kurs nach oben
-        4. Multi-Level-Ratchet:          Gestaffelte Gewinnsicherung:
-           - +0.5% (TP-Level 1):  Ratchet-Floor = TP. Gewinn ist sicher.
-           - +1.0% (TP-Level 2):  Teilgewinnmitnahme 50% + Floor auf +0.5%
-           - +1.5% (TP-Level 3):  Floor auf +1.0%
-           - +2.0% (TP-Level 4):  Floor auf +1.5%
-
-        BREAKEVEN-STOP (NUR nach 10+ Minuten, NUR bei +0.4%):
-        Backtest (09.07.): Frueher Breakeven-Stop (+0.25%, <5 Min) killt
-        Gewinner-Trades. Erst NACH 10 Minuten ist ein Trade "etabliert"
-        genug, dass die Breakeven-Sicherung nicht die Rally abbricht.
+        KEIN fixer Ratchet/TP - der ATR-Trailing-Stop uebernimmt die
+        Gewinnsicherung dynamisch, ohne Gewinner bei +0.5% zu deckeln.
 
         Effektiver SL = max(alle Schichten). Kann NUR steigen, NIE fallen.
         """
         now = datetime.now(timezone.utc)
         exits = []
 
-        # Mehrstufige Ratchet-Levels: (Preis-Schwelle, Floor, Partial-Profit?)
-        RATCHET_LEVELS = [
-            (0.005, 0.0050, False),   # +0.5%: Floor=TP, KEIN Partial
-            (0.010, 0.0050, True),    # +1.0%: Floor=+0.5%, 50% Teilgewinn
-            (0.015, 0.0100, False),   # +1.5%: Floor=+1.0%
-            (0.020, 0.0150, False),   # +2.0%: Floor=+1.5%
-        ]
-        # Breakeven-Stop: NUR nach 10+ Minuten und NUR bei >=+0.4%
+        if atr_values is None:
+            atr_values = {}
+        if vwap_values is None:
+            vwap_values = {}
+
         BREAKEVEN_THRESHOLD = 0.004   # +0.40%
         BREAKEVEN_MIN_AGE = 10        # Minuten
 
@@ -269,56 +271,24 @@ class AccountManager:
             age = now - pos.entry_time
             pnl = (price - pos.entry_price) / pos.entry_price
             age_minutes = age.total_seconds() / 60.0
+            atr = atr_values.get(sym, 0.008)
 
-            # --- Trailing Stop: Hoechstpreis aktualisieren ---
+            # --- Highest-Price-Tracking (fuer ATR-Trail) ---
             if price > pos.highest_price:
                 pos.highest_price = price
 
-            # --- Breakeven-Stop: NUR nach Mindestalter + hoeherer Schwelle ---
-            # Backtest-Erkenntnis (09.07.): BE@0.25% sofort killt RIVN+5.3%,
-            # SWKS+1.0%, MCHP+0.5%. Erst nach 10+ Minuten ist das Signal
-            # "etabliert" genug dass die Breakeven-Sicherung sinnvoll ist.
+            current_vwap = vwap_values.get(sym, 0.0)
+
+            # --- Breakeven-Stop (konservativ, nur nach 10+ Min etabliert) ---
             if (not pos.breakeven_triggered
                     and age_minutes >= BREAKEVEN_MIN_AGE
                     and price >= pos.entry_price * (1.0 + BREAKEVEN_THRESHOLD)):
                 pos.breakeven_triggered = True
                 pos.breakeven_price = pos.entry_price
                 print(f"  [BREAKEVEN] {sym}: +0.40% nach {age_minutes:.0f}m! "
-                      f"SL auf Entry (${pos.entry_price:.2f}). "
-                      f"Trade ist etabliert, Verlustschutz aktiv.")
+                      f"SL auf Entry. Trade etabliert, kein Verlust mehr.")
 
-            # --- Multi-Level-Ratchet + Teilgewinnmitnahme ---
-            if self.ratchet_mode:
-                for level_idx, (trigger_pct, floor_pct, do_partial) in enumerate(RATCHET_LEVELS):
-                    if pos.ratchet_level <= level_idx and price >= pos.entry_price * (1.0 + trigger_pct):
-                        prev_level = pos.ratchet_level
-                        pos.ratchet_level = level_idx + 1
-                        pos.ratchet_floor = pos.entry_price * (1.0 + floor_pct)
-
-                        if do_partial and not pos.partial_exit_done:
-                            # Teilgewinnmitnahme bei +1.0% (Level 2)
-                            half_qty = max(1, pos.qty // 2)
-                            pos.partial_exit_done = True
-                            pos.ratchet_triggered = True
-                            print(f"  [PARTIAL] {sym}: +1.0% erreicht! "
-                                  f"Teilgewinnmitnahme: {half_qty}/{pos.qty} Shares. "
-                                  f"Rest mit SL-Floor +0.5% (${pos.ratchet_floor:.2f}).")
-                            exits.append(ExitAction(
-                                sym, "partial_profit", pos.entry_price, price, pnl,
-                                partial_qty=half_qty,
-                            ))
-                        elif level_idx == 0:
-                            # Erste Stufe (+0.5%): Ratchet aktiviert, Floor = TP
-                            pos.ratchet_triggered = True
-                            print(f"  [RATCHET] {sym}: +0.5% TP erreicht! "
-                                  f"SL-Floor auf TP (${pos.ratchet_floor:.2f}). "
-                                  f"Gewinn ist gesichert.")
-                        else:
-                            print(f"  [RATCHET L{level_idx+1}] {sym}: +{trigger_pct*100:.1f}% erreicht! "
-                                  f"SL-Floor auf +{floor_pct*100:.1f}% (${pos.ratchet_floor:.2f}).")
-                        break  # Nur ein Level pro Durchlauf
-
-            # --- Time-Decay Stop Loss ---
+            # --- Grace-SL (Crash-Schutz in den ersten Minuten) ---
             in_grace = age_minutes < self.entry_grace_t2_minutes
             if age_minutes < self.entry_grace_minutes:
                 active_sl_pct = self.grace_sl_pct
@@ -327,6 +297,7 @@ class AccountManager:
             else:
                 active_sl_pct = self.sl_pct
 
+            # --- Time-Decay SL ---
             pos_time_stop = float(getattr(pos, 'time_stop_minutes', self.time_stop_minutes))
             if in_grace:
                 time_sl = 0.0
@@ -343,35 +314,34 @@ class AccountManager:
             base_sl = pos.entry_price * (1.0 - active_sl_pct)
             be_price = pos.breakeven_price if pos.breakeven_triggered else 0.0
 
-            trailing_active = (
-                self.enable_trailing_sl
-                and pos.highest_price >= pos.entry_price * (1.0 + self.trailing_sl_pct)
+            # --- ATR-Trailing-Stop (Kerninnovation) ---
+            atr_trail_distance = self._current_trail_distance_pct(pos, atr)
+            atr_trailing_sl = pos.highest_price * (1.0 - atr_trail_distance)
+
+            # VWAP-Floor (Paper: "higher of Upper Band or VWAP")
+            vwap_floor = 0.0
+            if current_vwap > 0 and pos.highest_price > pos.entry_price:
+                vwap_floor = max(pos.entry_price, current_vwap)
+
+            # Effektiver SL — KEIN Ratchet-Floor, der ATR-Trail uebernimmt alles
+            effective_sl = max(
+                base_sl,
+                be_price,
+                time_sl,
+                atr_trailing_sl,
+                vwap_floor,
             )
-            if trailing_active:
-                trail_distance = self._current_trail_distance(pos)
-                trailing_sl = pos.highest_price * (1.0 - trail_distance)
-                effective_sl = max(base_sl, be_price, time_sl, pos.ratchet_floor, trailing_sl)
-            else:
-                effective_sl = max(base_sl, be_price, time_sl, pos.ratchet_floor)
 
-            # --- EXIT-CHECKS (in Prioritaets-Reihenfolge) ---
+            # --- EXIT-CHECKS ---
 
-            # Ratchet-Mode Exit
-            if self.ratchet_mode and pos.ratchet_triggered and price <= pos.ratchet_floor:
-                exits.append(ExitAction(sym, "ratchet_exit", pos.entry_price, price, pnl))
-
-            # Take Profit (nur wenn Ratchet AUS)
-            elif not self.ratchet_mode and price >= pos.tp_price:
-                exits.append(ExitAction(sym, "take_profit", pos.entry_price, price, pnl))
-
-            # Trailing Stop Loss
-            elif (self.enable_trailing_sl
-                  and pos.highest_price >= pos.entry_price * (1.0 + self.trailing_sl_pct)
-                  and price <= effective_sl
-                  and price >= pos.entry_price):
+            # ATR-Trailing-Stop: Gewinner dynamisch schuetzen
+            if (self.enable_trailing_sl
+                    and pos.highest_price > pos.entry_price
+                    and price <= effective_sl
+                    and effective_sl > pos.entry_price):
                 exits.append(ExitAction(sym, "trailing_stop", pos.entry_price, price, pnl))
 
-            # Stop Loss
+            # Stop Loss (fixer SL / Grace / Time-Decay / VWAP)
             elif price <= effective_sl:
                 exits.append(ExitAction(sym, "stop_loss", pos.entry_price, price, pnl))
 

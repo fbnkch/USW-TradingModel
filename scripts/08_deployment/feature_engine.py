@@ -138,6 +138,55 @@ class FeatureEngine:
             return None
         return np.stack(self._seq_buffer[-30:], axis=0)  # (30, 82)
 
+    def get_atr(self, period: int = 14) -> float:
+        """Berechnet ATR (Average True Range) aus dem Rolling-Buffer.
+
+        Verwendet die letzten `period` Bars im Buffer.
+        ATR = Wilder's Smoothing der True Range (High-Low mit Gap-Beruecksichtigung).
+
+        Returns:
+            ATR als absolute Preis-Differenz (nicht Prozent!).
+            Teile durch close fuer prozentuale ATR.
+        """
+        if len(self._buffer) < period + 1:
+            return 0.008  # Fallback: 0.8% bei angenommenem $100 Preis
+
+        recent = self._buffer.iloc[-(period + 1):]
+        highs = recent["high"].values
+        lows = recent["low"].values
+        closes = recent["close"].values
+
+        tr_list = []
+        for i in range(1, len(highs)):
+            tr = max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1]),
+            )
+            tr_list.append(tr)
+
+        # Wilder's Smoothing (vereinfacht: SMA der letzten `period` TRs)
+        return float(np.mean(tr_list[-period:]))
+
+    def get_atr_pct(self, period: int = 14) -> float:
+        """ATR als Prozentsatz des aktuellen Close-Preises."""
+        if len(self._buffer) < 2:
+            return 0.008
+        atr_abs = self.get_atr(period)
+        current_price = float(self._buffer.iloc[-1]["close"])
+        if current_price <= 0:
+            return 0.008
+        return atr_abs / current_price
+
+    def get_vwap(self) -> float:
+        """Gibt den aktuellen VWAP aus dem letzten Bar zurueck.
+
+        Alpaca liefert den kumulativen Session-VWAP in jeder Bar mit.
+        """
+        if len(self._buffer) == 0:
+            return 0.0
+        return float(self._buffer.iloc[-1]["vwap"])
+
     def process_bar(self, bar: dict) -> Optional[np.ndarray]:
         """Verarbeitet eine neue 1-Minuten-Bar und gibt den 82-Dim Feature-Vektor zurueck.
 
